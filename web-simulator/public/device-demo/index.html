@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ACME-IPC-2100 网络摄像机</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="device-root">
+      <!-- 登录视图 -->
+      <section id="login-view" class="login-view">
+        <div class="login-card">
+          <div class="device-logo">ACME</div>
+          <h1>网络摄像机</h1>
+          <p class="device-model">ACME-IPC-2100 · 固件 V2.4.1</p>
+          <label class="field">
+            <span>用户名</span>
+            <input
+              id="login-user"
+              type="text"
+              autocomplete="off"
+              placeholder="请输入用户名"
+            />
+          </label>
+          <label class="field">
+            <span>密码</span>
+            <input
+              id="login-pass"
+              type="password"
+              autocomplete="off"
+              placeholder="请输入密码"
+            />
+          </label>
+          <button id="login-btn" class="btn btn-primary">登 录</button>
+          <p id="login-error" class="login-error"></p>
+          <p class="login-hint">演示账号：admin / admin123</p>
+        </div>
+      </section>
+
+      <!-- 主视图 -->
+      <section id="main-view" class="main-view" hidden>
+        <header class="device-header">
+          <span class="device-logo">ACME</span>
+          <span id="header-device-name" class="header-name">网络摄像机</span>
+          <span class="header-spacer"></span>
+          <span id="header-user" class="header-user"></span>
+          <button id="logout-btn" class="btn btn-ghost">退出</button>
+        </header>
+
+        <nav class="device-tabs">
+          <button id="tab-live" class="tab" data-view="live">实时预览</button>
+          <button id="tab-config" class="tab" data-view="config">
+            设备配置
+          </button>
+          <button id="tab-playback" class="tab" data-view="playback">
+            录像回放
+          </button>
+        </nav>
+
+        <main class="device-body">
+          <div id="view-live" class="view view-live">
+            <div class="live-frame">
+              <canvas id="live-canvas" width="640" height="360"></canvas>
+              <span class="live-badge">LIVE</span>
+            </div>
+            <div class="live-meta">
+              <span id="live-device">—</span>
+              <span id="live-status" class="live-status">● 在线</span>
+            </div>
+          </div>
+
+          <div id="view-config" class="view view-config" hidden>
+            <form id="config-form" class="config-form">
+              <label class="field">
+                <span>设备名称</span>
+                <input id="config-name" type="text" />
+              </label>
+              <label class="field">
+                <span>分辨率</span>
+                <select id="config-resolution">
+                  <option value="1280x720">1280 × 720</option>
+                  <option value="1920x1080">1920 × 1080</option>
+                  <option value="2560x1440">2560 × 1440</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>帧率 (fps)</span>
+                <input id="config-fps" type="number" min="1" max="60" />
+              </label>
+              <label class="field">
+                <span>码率 (kbps)</span>
+                <input
+                  id="config-bitrate"
+                  type="number"
+                  min="256"
+                  max="16384"
+                />
+              </label>
+              <label class="field">
+                <span>时区</span>
+                <select id="config-timezone">
+                  <option value="UTC+08:00">UTC+08:00</option>
+                  <option value="UTC+09:00">UTC+09:00</option>
+                  <option value="UTC+00:00">UTC+00:00</option>
+                </select>
+              </label>
+              <div class="config-actions">
+                <button id="config-save" type="button" class="btn btn-primary">
+                  保存配置
+                </button>
+                <span id="config-hint" class="config-hint"></span>
+              </div>
+            </form>
+          </div>
+
+          <div id="view-playback" class="view view-playback" hidden>
+            <ul id="rec-list" class="rec-list"></ul>
+            <div class="player-col">
+              <div id="player-host" class="player-host">
+                请从左侧选择一条录像
+              </div>
+            </div>
+          </div>
+        </main>
+      </section>
+    </div>
+
+    <script src="./vendor/vendor-plugin.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

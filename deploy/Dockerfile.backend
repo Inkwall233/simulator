@@ -1,0 +1,28 @@
+# ============================================================
+# skilllab-admin 后端镜像（Spring Boot 2.7.18 / Java 8）
+# 构建上下文为仓库根目录（见 docker-compose.yml 的 context: ..）
+# ============================================================
+
+# ---------------- 构建阶段 ----------------
+# 若该 tag 拉取失败，可换成 maven:3.8-openjdk-8
+FROM maven:3.9-eclipse-temurin-8 AS build
+WORKDIR /build
+
+# 先只拷 pom，利用镜像层缓存跳过重复下载依赖
+COPY skilllab-admin/pom.xml ./
+RUN mvn -B -q -DskipTests dependency:go-offline
+
+COPY skilllab-admin/src ./src
+RUN mvn -B -q -DskipTests clean package
+
+# ---------------- 运行阶段 ----------------
+FROM eclipse-temurin:8-jre-alpine
+WORKDIR /app
+
+ENV TZ=Asia/Shanghai
+ENV JAVA_OPTS="-Xms256m -Xmx512m"
+
+COPY --from=build /build/target/skilllab-admin-0.0.1-SNAPSHOT.jar app.jar
+
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

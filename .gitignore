@@ -1,0 +1,47 @@
+# ============================================================
+# 根级 .gitignore
+# 各子项目（web-front / web-admin / web-simulator / skilllab-admin）
+# 已有各自的 .gitignore，这里只兜住仓库级、跨项目的产物与敏感文件。
+# ============================================================
+
+# ---- 部署密钥与 ACME 临时文件（绝不可入库）----
+# certbot 会把域名证书与私钥写进 deploy/certs/live/<domain>/
+deploy/certs/
+deploy/acme-webroot/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ---- 构建产物与依赖（兜底，防止新增子项目漏配）----
+node_modules/
+dist/
+dist-ssr/
+target/
+
+# ---- 日志 ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- 编辑器 / IDE ----
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.settings/
+.classpath
+.project
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 本地环境变量（.env.development / .env.production 需入库）----
+.env.local
+.env.*.local

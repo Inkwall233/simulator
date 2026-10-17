@@ -1,0 +1,324 @@
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px;
+  color: #1c2733;
+  background: #eef1f5;
+}
+
+#device-root {
+  height: 100%;
+}
+
+.device-logo {
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #0a7fba;
+}
+
+/* ------------------------------------------------------------ 登录视图 */
+.login-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: linear-gradient(160deg, #dfe8f1 0%, #eef1f5 60%);
+}
+
+.login-card {
+  width: 300px;
+  padding: 28px 24px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(20, 40, 60, 0.12);
+  text-align: center;
+}
+
+.login-card h1 {
+  margin: 12px 0 4px;
+  font-size: 18px;
+}
+
+.device-model {
+  margin: 0 0 18px;
+  color: #7b8794;
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 4px;
+  color: #5b6775;
+  font-size: 12px;
+}
+
+input,
+select {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #cfd8e3;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1c2733;
+  background: #fff;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #0a7fba;
+  box-shadow: 0 0 0 2px rgba(10, 127, 186, 0.15);
+}
+
+.btn {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-primary {
+  width: 100%;
+  color: #fff;
+  background: #0a7fba;
+}
+
+.btn-primary:hover {
+  background: #096c9f;
+}
+
+.btn-ghost {
+  color: #5b6775;
+  border-color: #cfd8e3;
+  background: transparent;
+}
+
+.login-error {
+  min-height: 16px;
+  margin: 10px 0 0;
+  color: #d64545;
+  font-size: 12px;
+}
+
+.login-hint {
+  margin: 6px 0 0;
+  color: #98a2b0;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------ 主视图 */
+.main-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.device-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 16px;
+  color: #fff;
+  background: #17232f;
+}
+
+.header-name {
+  font-weight: 600;
+}
+
+.header-spacer {
+  flex: 1;
+}
+
+.header-user {
+  color: #9fb0c0;
+  font-size: 12px;
+}
+
+.device-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid #dbe3ec;
+  background: #fff;
+}
+
+.tab {
+  height: 38px;
+  padding: 0 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #5b6775;
+  font-size: 13px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tab.active {
+  color: #0a7fba;
+  border-bottom-color: #0a7fba;
+  font-weight: 600;
+}
+
+.device-body {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+}
+
+.view {
+  height: 100%;
+}
+
+/* 实时预览 */
+.view-live {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.live-frame {
+  position: relative;
+  width: 640px;
+  max-width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0b1016;
+}
+
+.live-frame canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.live-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  color: #fff;
+  background: rgba(214, 69, 69, 0.9);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.live-meta {
+  display: flex;
+  gap: 16px;
+  color: #5b6775;
+  font-size: 12px;
+}
+
+.live-status {
+  color: #2e9e5b;
+}
+
+/* 设备配置 */
+.view-config {
+  max-width: 420px;
+}
+
+.config-form {
+  padding: 18px;
+  border: 1px solid #dbe3ec;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.config-actions .btn-primary {
+  width: auto;
+}
+
+.config-hint {
+  color: #2e9e5b;
+  font-size: 12px;
+}
+
+/* 录像回放 */
+.view-playback {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+}
+
+.rec-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #dbe3ec;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.rec-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef1f5;
+  cursor: pointer;
+}
+
+.rec-item:last-child {
+  border-bottom: none;
+}
+
+.rec-item:hover {
+  background: #f4f8fb;
+}
+
+.rec-item.active {
+  background: #e6f3fa;
+}
+
+.rec-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.rec-meta {
+  color: #7b8794;
+  font-size: 12px;
+}
+
+.player-host {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  border: 1px solid #dbe3ec;
+  border-radius: 6px;
+  color: #98a2b0;
+  background: #0b1016;
+  overflow: hidden;
+}

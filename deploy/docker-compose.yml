@@ -1,0 +1,61 @@
+# ============================================================
+# SkillLab Docker 部署编排
+#
+# 拓扑：
+#   edge    ── nginx，唯一对外暴露 80/443；按域名分发静态资源，
+#              并把 /api/ 反代给 backend
+#   backend ── Spring Boot 2.7.18 / JDK8，仅内网暴露 8080
+#
+# 三个前端不做进 Docker，而是在宿主机构建好后以只读卷挂进 edge。
+# 构建方式（三个目录各跑一次，注意 web-admin / web-front 的
+# VITE_SIMULATOR_URL 要指向 https://sim.skilllab.xyz 再 build）：
+#   cd web-front      && npm ci && npm run build
+#   cd web-simulator  && npm ci && npm run build
+#   cd web-admin      && npm ci && npm run build
+#
+# 启动：
+#   docker compose up -d --build
+# ============================================================
+
+name: skilllab
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # 首次部署先换成 ./nginx/bootstrap（见 acme-only.conf 注释）
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # ACME HTTP-01 webroot
+      - ./acme-webroot:/var/www/acme
+      # certbot 写入的证书；nginx 以容器内 /etc/letsencrypt 路径引用
+      - ./certs:/etc/letsencrypt:ro
+      # 三个前端的构建产物（只读挂载）
+      - ../web-front/dist:/srv/front:ro
+      - ../web-simulator/dist:/srv/sim:ro
+      - ../web-admin/dist:/srv/admin:ro
+    depends_on:
+      - backend
+    networks:
+      - skilllab
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    # 只在内网暴露，不映射到宿主机端口，全部流量经 edge 进入
+    expose:
+      - "8080"
+    environment:
+      JAVA_OPTS: "-Xms256m -Xmx512m -Duser.timezone=Asia/Shanghai"
+      TZ: Asia/Shanghai
+    networks:
+      - skilllab
+
+networks:
+  skilllab:
+    driver: bridge

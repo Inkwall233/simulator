@@ -1,0 +1,27 @@
+# ============================================================
+# 换行符与文件类型策略
+#
+# 本机 core.autocrlf=true，若不加约束，换行符的最终形态会随
+# 全局配置和协作者的平台漂移。这里显式定死，避免 start-all.ps1
+# 这类脚本在不同平台检出后出现 CRLF/LF 混用。
+# ============================================================
+
+# 默认：仓库内存 LF，检出也用 LF
+* text=auto eol=lf
+
+# Windows 上的 PowerShell / 批处理脚本按 CRLF 检出
+# （start-all.ps1 需保持 UTF-8 带 BOM + CRLF，否则 PS5.1 中文会乱码）
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件禁止任何换行符转换
+*.jar   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.pdf   binary
