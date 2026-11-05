@@ -4,9 +4,31 @@ server:
 spring:
   application:
     name: skilllab-admin
+  datasource:
+    url: ${SKILLLAB_DB_URL:jdbc:h2:file:./ai-metadata}
+    username: ${SKILLLAB_DB_USERNAME:sa}
+    password: ${SKILLLAB_DB_PASSWORD:}
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: ${SKILLLAB_AI_MAX_PACKAGE_SIZE:200MB}
+      max-request-size: ${SKILLLAB_AI_MAX_REQUEST_SIZE:210MB}
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
+
+skilllab:
+  ai:
+    enabled: ${SKILLLAB_AI_ENABLED:true}
+    admin-key: ${SKILLLAB_AI_ADMIN_KEY:}
+    worker-url: ${AI_WORKER_URL:http://ai-worker:3001}
+    worker-secret: ${AI_WORKER_SHARED_SECRET:}
+    data-dir: ${AI_DATA_DIR:./data/ai-packages}
+    allowed-target-origins: ${AI_ALLOWED_TARGET_ORIGINS:}
 
 logging:
   level:

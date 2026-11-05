@@ -12,6 +12,11 @@ const router = createRouter({
       path: '/simulator',
       name: 'simulator',
       component: () => import('@/views/SimulatorView.vue')
+    },
+    {
+      path: '/ai-workbench',
+      name: 'ai-workbench',
+      component: () => import('@/views/AiWorkbenchView.vue')
     }
   ]
 })

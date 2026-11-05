@@ -1,0 +1,53 @@
+# AI workbench override. Keep deploy/docker-compose.yml as the base stack.
+# Required environment: SKILLLAB_AI_ADMIN_KEY, AI_WORKER_SHARED_SECRET,
+# AI_ALLOWED_TARGET_ORIGINS. Optional: AI_MODEL, AI_OPENAI_API_KEY,
+# AI_OPENAI_CHAT_COMPLETIONS_URL.
+
+services:
+  backend:
+    environment:
+      SKILLLAB_AI_ENABLED: "true"
+      SKILLLAB_AI_ADMIN_KEY: ${SKILLLAB_AI_ADMIN_KEY:?Set SKILLLAB_AI_ADMIN_KEY}
+      SKILLLAB_DB_URL: "jdbc:h2:file:/data/ai-metadata"
+      AI_DATA_DIR: /data/ai-packages
+      AI_WORKER_URL: http://ai-worker:3001
+      AI_WORKER_SHARED_SECRET: ${AI_WORKER_SHARED_SECRET:?Set AI_WORKER_SHARED_SECRET}
+      AI_ALLOWED_TARGET_ORIGINS: ${AI_ALLOWED_TARGET_ORIGINS:?Set AI_ALLOWED_TARGET_ORIGINS}
+    volumes:
+      - ai-workbench-data:/data
+    depends_on:
+      ai-worker:
+        condition: service_healthy
+
+  ai-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ai-worker
+    restart: unless-stopped
+    expose:
+      - "3001"
+    environment:
+      PORT: "3001"
+      AI_ALLOWED_WEBSOCKET_ORIGINS: ${AI_ALLOWED_WEBSOCKET_ORIGINS:-}
+      AI_SESSION_IDLE_TIMEOUT_MS: ${AI_SESSION_IDLE_TIMEOUT_MS:-1800000}
+      AI_WORKER_SHARED_SECRET: ${AI_WORKER_SHARED_SECRET:?Set AI_WORKER_SHARED_SECRET}
+      AI_ALLOWED_TARGET_ORIGINS: ${AI_ALLOWED_TARGET_ORIGINS:?Set AI_ALLOWED_TARGET_ORIGINS}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_OPENAI_API_KEY: ${AI_OPENAI_API_KEY:-}
+      AI_OPENAI_CHAT_COMPLETIONS_URL: ${AI_OPENAI_CHAT_COMPLETIONS_URL:-https://api.openai.com/v1/chat/completions}
+      AI_IGNORE_HTTPS_ERRORS: ${AI_IGNORE_HTTPS_ERRORS:-false}
+    shm_size: 1gb
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3001/health').then((r) => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - skilllab
+
+volumes:
+  ai-workbench-data:

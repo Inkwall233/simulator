@@ -2,7 +2,7 @@
     SkillLab 一键启动脚本
 
     用法:
-        .\start-all.ps1              启动 3 个前端 dev server + skilllab-admin 后端
+        .\start-all.ps1              启动 3 个前端 dev server + skilllab-admin 后端 + AI Worker
         .\start-all.ps1 -Stop        停止上述服务占用的端口
         .\start-all.ps1 -TimeoutSeconds 180   自定义等待就绪的超时（默认 120 秒）
 
@@ -29,6 +29,10 @@ $frontends = @(
 $backendDir  = Join-Path $root 'skilllab-admin'
 $backendPort = 8080
 $backendUrl  = 'http://localhost:8080/api/health'
+$workerDir   = Join-Path $root 'ai-worker'
+$workerPort  = 3001
+$workerUrl   = 'http://localhost:3001/health'
+$aiEnvFile   = Join-Path $root '.env.ai'
 
 $mavenFallback = 'D:\JAVA\apache-maven-3.9.16\bin\mvn.cmd'
 $jdkFallback   = 'C:\Program Files\Eclipse Adoptium\jdk-8.0.504.1-hotspot'
@@ -43,7 +47,7 @@ function Get-PortOwners {
 # ---------------------------------------------------------------- 停止模式
 if ($Stop) {
     Write-Host '停止 SkillLab 服务 ...' -ForegroundColor Cyan
-    $ports = @($frontends | ForEach-Object { $_.Port }) + $backendPort
+    $ports = @($frontends | ForEach-Object { $_.Port }) + $backendPort + $workerPort
     foreach ($port in $ports) {
         $owners = Get-PortOwners -Port $port
         if (-not $owners) {
@@ -62,6 +66,51 @@ if ($Stop) {
     }
     return
 }
+
+# --------------------------------------------------------- AI 工作台环境配置
+function Import-AiEnvironment {
+    if (Test-Path -LiteralPath $aiEnvFile) {
+        foreach ($line in Get-Content -LiteralPath $aiEnvFile) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+            if ($trimmed -notmatch '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { continue }
+
+            $name = $Matches[1]
+            $value = $Matches[2].Trim()
+            if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+            Set-Item -Path "Env:$name" -Value $value
+        }
+    }
+    else {
+        $requiredFromEnvironment = @($env:SKILLLAB_AI_ADMIN_KEY, $env:AI_WORKER_SHARED_SECRET, $env:AI_ALLOWED_TARGET_ORIGINS)
+        if ($requiredFromEnvironment | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            $exampleFile = Join-Path $root 'deploy\ai-workbench.env.example'
+            if (Test-Path -LiteralPath $exampleFile) {
+                Copy-Item -LiteralPath $exampleFile -Destination $aiEnvFile
+            }
+            throw "已在仓库根目录创建 .env.ai 示例配置。请填写 SKILLLAB_AI_ADMIN_KEY、AI_WORKER_SHARED_SECRET 和 AI_ALLOWED_TARGET_ORIGINS 后重新运行。"
+        }
+    }
+
+    foreach ($name in 'SKILLLAB_AI_ADMIN_KEY', 'AI_WORKER_SHARED_SECRET', 'AI_ALLOWED_TARGET_ORIGINS') {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ([string]::IsNullOrWhiteSpace($value) -or $value -like 'replace-with-*') {
+            throw "AI 工作台配置 $name 未填写，请编辑 $aiEnvFile。"
+        }
+    }
+
+    if ($env:AI_ALLOWED_TARGET_ORIGINS -match 'device\.example\.internal') {
+        throw "AI_ALLOWED_TARGET_ORIGINS 仍包含示例域名，请编辑 $aiEnvFile 并填写已授权设备的精确 origin。"
+    }
+
+    # 本地开发时 Java 后端通过 localhost 访问 Worker。
+    $env:AI_WORKER_URL = 'http://localhost:3001'
+    $env:PORT = '3001'
+}
+
+Import-AiEnvironment
 
 # ---------------------------------------------------------------- 环境检查
 foreach ($tool in 'node', 'npm') {
@@ -86,6 +135,7 @@ elseif (Test-Path $mavenFallback) {
 Write-Host ("根目录    : {0}" -f $root) -ForegroundColor DarkGray
 Write-Host ("JAVA_HOME : {0}" -f $(if ($env:JAVA_HOME) { $env:JAVA_HOME } else { '(未设置)' })) -ForegroundColor DarkGray
 Write-Host ("Maven     : {0}" -f $(if ($mvnPath) { $mvnPath } else { '(未找到)' })) -ForegroundColor DarkGray
+Write-Host ("AI env    : {0}" -f $aiEnvFile) -ForegroundColor DarkGray
 Write-Host ''
 
 function Start-ServiceWindow {
@@ -107,6 +157,29 @@ foreach ($frontend in $frontends) {
     Write-Host ("  √ {0,-16} {1}" -f $frontend.Name, $frontend.Url) -ForegroundColor Green
 }
 
+# ---------------------------------------------------------------- 启动 AI Worker
+Write-Host '启动 AI 浏览器 Worker ...' -ForegroundColor Cyan
+if (-not (Test-Path (Join-Path $workerDir 'node_modules'))) {
+    Write-Host '  Worker 缺少依赖，正在 npm ci ...' -ForegroundColor DarkGray
+    Push-Location $workerDir
+    try {
+        & npm ci --no-fund --no-audit
+        if ($LASTEXITCODE -ne 0) { throw 'AI Worker npm ci 失败' }
+    }
+    finally { Pop-Location }
+}
+
+Push-Location $workerDir
+try {
+    Write-Host '  检查 Playwright Chromium ...' -ForegroundColor DarkGray
+    & npx playwright install chromium
+    if ($LASTEXITCODE -ne 0) { throw 'Playwright Chromium 安装失败' }
+}
+finally { Pop-Location }
+
+Start-ServiceWindow -Title 'ai-worker' -Dir $workerDir -InnerScript 'npm start'
+Write-Host ("  √ {0,-16} {1}" -f 'ai-worker', $workerUrl) -ForegroundColor Green
+
 # ---------------------------------------------------------------- 启动后端
 Write-Host '启动后端 ...' -ForegroundColor Cyan
 if ($mvnPath) {
@@ -124,6 +197,7 @@ else {
 
 # ---------------------------------------------------------------- 等待就绪
 $targets = @($frontends | ForEach-Object { @{ Name = $_.Name; Port = $_.Port; Url = $_.Url } })
+$targets += @{ Name = 'ai-worker'; Port = $workerPort; Url = $workerUrl }
 if ($mvnPath) {
     $targets += @{ Name = 'skilllab-admin'; Port = $backendPort; Url = $backendUrl }
 }
@@ -157,3 +231,4 @@ foreach ($target in $targets) {
 Write-Host ''
 Write-Host '各服务运行在独立窗口中，关闭窗口即停止该服务。' -ForegroundColor DarkGray
 Write-Host '也可执行 .\start-all.ps1 -Stop 一键停止全部服务。' -ForegroundColor DarkGray
+Write-Host 'AI 工作台入口: http://localhost:5174/ai-workbench' -ForegroundColor Cyan
