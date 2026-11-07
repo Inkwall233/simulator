@@ -2,7 +2,7 @@
     SkillLab 一键启动脚本
 
     用法:
-        .\start-all.ps1              启动 3 个前端 dev server + skilllab-admin 后端 + AI Worker
+        .\start-all.ps1              启动 3 个前端 + 后端 + AI Worker + 本地摄像机演示设备
         .\start-all.ps1 -Stop        停止上述服务占用的端口
         .\start-all.ps1 -TimeoutSeconds 180   自定义等待就绪的超时（默认 120 秒）
 
@@ -32,6 +32,11 @@ $backendUrl  = 'http://localhost:8080/api/health'
 $workerDir   = Join-Path $root 'ai-worker'
 $workerPort  = 3001
 $workerUrl   = 'http://localhost:3001/health'
+$demoDeviceDir = Join-Path $root 'ai-demo-device'
+$demoDevicePort = 19090
+$demoDeviceUrl = "http://127.0.0.1:$demoDevicePort"
+$demoDeviceHealthUrl = "$demoDeviceUrl/health"
+$demoPackage = Join-Path $demoDeviceDir 'device-package.zip'
 $aiEnvFile   = Join-Path $root '.env.ai'
 
 $mavenFallback = 'D:\JAVA\apache-maven-3.9.16\bin\mvn.cmd'
@@ -47,7 +52,7 @@ function Get-PortOwners {
 # ---------------------------------------------------------------- 停止模式
 if ($Stop) {
     Write-Host '停止 SkillLab 服务 ...' -ForegroundColor Cyan
-    $ports = @($frontends | ForEach-Object { $_.Port }) + $backendPort + $workerPort
+    $ports = @($frontends | ForEach-Object { $_.Port }) + $backendPort + $workerPort + $demoDevicePort
     foreach ($port in $ports) {
         $owners = Get-PortOwners -Port $port
         if (-not $owners) {
@@ -108,6 +113,8 @@ function Import-AiEnvironment {
     # 本地开发时 Java 后端通过 localhost 访问 Worker。
     $env:AI_WORKER_URL = 'http://localhost:3001'
     $env:PORT = '3001'
+    $env:DEMO_DEVICE_HOST = '127.0.0.1'
+    $env:DEMO_DEVICE_PORT = [string]$demoDevicePort
 }
 
 Import-AiEnvironment
@@ -145,6 +152,17 @@ function Start-ServiceWindow {
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoExit', '-NoProfile', '-EncodedCommand', $encoded) | Out-Null
 }
 
+# ---------------------------------------------------------------- 生成并启动本地演示设备
+$demoPublicDir = Join-Path $demoDeviceDir 'public'
+if (-not (Test-Path (Join-Path $demoPublicDir 'index.html'))) {
+    throw "演示设备页面不存在: $demoPublicDir"
+}
+Write-Host '生成可上传的演示设备 ZIP ...' -ForegroundColor Cyan
+Compress-Archive -Path (Join-Path $demoPublicDir '*') -DestinationPath $demoPackage -Force
+Write-Host ("  √ 上传包: {0}" -f $demoPackage) -ForegroundColor Green
+Start-ServiceWindow -Title 'ai-demo-device' -Dir $demoDeviceDir -InnerScript 'npm start'
+Write-Host ("  √ {0,-16} {1}" -f 'ai-demo-device', $demoDeviceUrl) -ForegroundColor Green
+
 # ---------------------------------------------------------------- 启动前端
 Write-Host '启动前端 dev server ...' -ForegroundColor Cyan
 foreach ($frontend in $frontends) {
@@ -171,9 +189,33 @@ if (-not (Test-Path (Join-Path $workerDir 'node_modules'))) {
 
 Push-Location $workerDir
 try {
-    Write-Host '  检查 Playwright Chromium ...' -ForegroundColor DarkGray
-    & npx playwright install chromium
-    if ($LASTEXITCODE -ne 0) { throw 'Playwright Chromium 安装失败' }
+    Write-Host '  检查当前 Playwright 版本对应的 Chromium ...' -ForegroundColor DarkGray
+    $chromiumExecutable = & node -e "process.stdout.write(require('playwright').chromium.executablePath())"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($chromiumExecutable)) {
+        throw '无法从 ai-worker 的 Playwright 包解析 Chromium 路径。请确认 ai-worker 依赖已安装。'
+    }
+
+    $chromiumRevisionDir = Split-Path -Parent (Split-Path -Parent $chromiumExecutable)
+    $browserCacheDir = Split-Path -Parent $chromiumRevisionDir
+    $chromiumRevision = Split-Path -Leaf $chromiumRevisionDir
+    $headlessRevision = $chromiumRevision -replace '^chromium-', 'chromium_headless_shell-'
+    $headlessExecutable = Join-Path $browserCacheDir (Join-Path $headlessRevision 'chrome-headless-shell-win64\chrome-headless-shell.exe')
+    $browserInstalled = (Test-Path -LiteralPath $chromiumExecutable) -and (Test-Path -LiteralPath $headlessExecutable)
+
+    if ($browserInstalled) {
+        Write-Host '  √ 对应版本的 Chromium 与 Headless Shell 已安装，跳过下载。' -ForegroundColor Green
+    }
+    else {
+        Write-Host '  未找到当前 Playwright 版本所需的浏览器，开始安装 ...' -ForegroundColor DarkGray
+        & npx playwright install chromium
+        $installExitCode = $LASTEXITCODE
+        if ($installExitCode -ne 0) {
+            throw "Playwright Chromium 安装失败（退出码 $installExitCode）。请查看上方安装器输出；若浏览器已手动安装，可检查路径: $chromiumExecutable"
+        }
+        if (-not (Test-Path -LiteralPath $chromiumExecutable) -or -not (Test-Path -LiteralPath $headlessExecutable)) {
+            throw "Playwright 安装命令已结束，但当前版本浏览器文件仍缺失。预期路径: $chromiumExecutable"
+        }
+    }
 }
 finally { Pop-Location }
 
@@ -197,9 +239,10 @@ else {
 
 # ---------------------------------------------------------------- 等待就绪
 $targets = @($frontends | ForEach-Object { @{ Name = $_.Name; Port = $_.Port; Url = $_.Url } })
-$targets += @{ Name = 'ai-worker'; Port = $workerPort; Url = $workerUrl }
+$targets += @{ Name = 'ai-worker'; Port = $workerPort; Url = $workerUrl; ExpectedService = 'skilllab-ai-browser-worker' }
+$targets += @{ Name = 'ai-demo-device'; Port = $demoDevicePort; Url = $demoDeviceHealthUrl; ExpectedService = 'skilllab-demo-device' }
 if ($mvnPath) {
-    $targets += @{ Name = 'skilllab-admin'; Port = $backendPort; Url = $backendUrl }
+    $targets += @{ Name = 'skilllab-admin'; Port = $backendPort; Url = $backendUrl; ExpectedService = 'skilllab-admin' }
 }
 
 Write-Host ''
@@ -209,8 +252,14 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $deadline -and $ready.Count -lt $targets.Count) {
     foreach ($target in $targets) {
         if (-not $ready.ContainsKey($target.Port)) {
-            if (Get-PortOwners -Port $target.Port) {
-                $ready[$target.Port] = $true
+            try {
+                $probe = Invoke-RestMethod -Uri $target.Url -TimeoutSec 2
+                if (-not $target.ExpectedService -or $probe.service -eq $target.ExpectedService) {
+                    $ready[$target.Port] = $true
+                }
+            }
+            catch {
+                # Keep waiting until the service responds successfully.
             }
         }
     }
@@ -224,7 +273,7 @@ foreach ($target in $targets) {
         Write-Host ("  √ {0,-16} {1}" -f $target.Name, $target.Url) -ForegroundColor Green
     }
     else {
-        Write-Host ("  × {0,-16} 端口 {1} 未就绪，请查看对应窗口的日志" -f $target.Name, $target.Port) -ForegroundColor Red
+        Write-Host ("  × {0,-16} 健康检查失败（端口 {1}），请查看对应窗口的日志或检查端口占用" -f $target.Name, $target.Port) -ForegroundColor Red
     }
 }
 
@@ -232,3 +281,4 @@ Write-Host ''
 Write-Host '各服务运行在独立窗口中，关闭窗口即停止该服务。' -ForegroundColor DarkGray
 Write-Host '也可执行 .\start-all.ps1 -Stop 一键停止全部服务。' -ForegroundColor DarkGray
 Write-Host 'AI 工作台入口: http://localhost:5174/ai-workbench' -ForegroundColor Cyan
+Write-Host ("演示设备入口: {0}  |  演示账号: admin / demo123" -f $demoDeviceUrl) -ForegroundColor Cyan

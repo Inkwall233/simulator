@@ -26,11 +26,14 @@ public class AiWorkbenchController {
     private final AiWorkbenchService service;
     private final AiWorkerClient worker;
     private final AiApiDraftService drafts;
+    private final AiSimulatorDraftService simulatorDrafts;
 
-    public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker, AiApiDraftService drafts) {
+    public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
+            AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts) {
         this.service = service;
         this.worker = worker;
         this.drafts = drafts;
+        this.simulatorDrafts = simulatorDrafts;
     }
 
     @GetMapping("/device-projects")
@@ -46,6 +49,25 @@ public class AiWorkbenchController {
     @GetMapping("/device-projects/{projectId}")
     public Map<String, Object> getProject(@PathVariable String projectId) {
         return service.getProject(projectId);
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-drafts")
+    public Map<String, Object> createSimulatorDraft(
+            @PathVariable String projectId,
+            @RequestBody Map<String, Object> request) {
+        return simulatorDrafts.createDraft(projectId, request);
+    }
+
+    @GetMapping("/device-projects/{projectId}/simulator-drafts")
+    public List<Map<String, Object>> listSimulatorDrafts(@PathVariable String projectId) {
+        return simulatorDrafts.listDrafts(projectId);
+    }
+
+    @GetMapping("/device-projects/{projectId}/simulator-drafts/{draftId}")
+    public Map<String, Object> getSimulatorDraft(
+            @PathVariable String projectId,
+            @PathVariable String draftId) {
+        return simulatorDrafts.getDraft(projectId, draftId);
     }
 
     @PostMapping(value = "/device-projects/{projectId}/packages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

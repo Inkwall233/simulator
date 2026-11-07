@@ -46,3 +46,4 @@ desktop.ini
 .env.local
 .env.*.local
 .env.ai
+ai-demo-device/device-package.zip

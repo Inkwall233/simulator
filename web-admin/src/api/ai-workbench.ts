@@ -52,6 +52,17 @@ export interface PendingApproval {
   createdAt: string
 }
 
+export interface SimulatorDraft {
+  id: string
+  projectId: string
+  packageId: string
+  sourceApiDraftId: string
+  versionNumber: number
+  status: string
+  createdAt: string
+  payload?: Record<string, unknown>
+}
+
 export function getSavedAdminKey(): string {
   return sessionStorage.getItem(adminKeyStorageKey) || ''
 }
@@ -87,6 +98,26 @@ export async function uploadPackage(projectId: string, file: File): Promise<Pack
     method: 'POST',
     body
   })
+}
+
+export async function createSimulatorDraft(
+  projectId: string,
+  packageId: string,
+  apiDraftId: string
+): Promise<SimulatorDraft> {
+  return aiRequest<SimulatorDraft>('/device-projects/' + projectId + '/simulator-drafts', {
+    method: 'POST',
+    body: JSON.stringify({ packageId, apiDraftId })
+  })
+}
+
+export async function getSimulatorDraft(
+  projectId: string,
+  draftId: string
+): Promise<SimulatorDraft> {
+  return aiRequest<SimulatorDraft>(
+    '/device-projects/' + projectId + '/simulator-drafts/' + draftId
+  )
 }
 
 export async function fetchScreenshot(sessionId: string): Promise<Blob> {

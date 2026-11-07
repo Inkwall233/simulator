@@ -23,6 +23,7 @@ const configuredIdleTimeout = Number(process.env.AI_SESSION_IDLE_TIMEOUT_MS || 1
 const idleTimeoutMs = Number.isFinite(configuredIdleTimeout)
   ? Math.max(60000, configuredIdleTimeout)
   : 1800000
+const maxResponseSampleBytes = 65536
 const sessions = new Map()
 let sharedBrowser
 
@@ -277,10 +278,15 @@ async function recordResponse(session, response) {
   const headers = await response.allHeaders().catch(() => ({}))
   entry.contentType = headers['content-type'] || null
   if (!entry.contentType?.toLowerCase().includes('application/json')) return
-  const length = Number(headers['content-length'] || 0)
-  if (!Number.isFinite(length) || length <= 0 || length > 65536) return
-  const data = await response.json().catch(() => null)
-  if (data !== null) entry.responseSample = sanitizeJson(data)
+  const declaredLength = Number(headers['content-length'] || 0)
+  if (declaredLength > maxResponseSampleBytes) return
+  const body = await response.body().catch(() => null)
+  if (!body || body.length === 0 || body.length > maxResponseSampleBytes) return
+  try {
+    entry.responseSample = sanitizeJson(JSON.parse(body.toString('utf8')))
+  } catch {
+    // Ignore malformed or non-JSON response bodies.
+  }
 }
 
 async function guardRequest(session, route) {

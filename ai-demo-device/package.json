@@ -1,0 +1,10 @@
+{
+  "name": "skilllab-demo-camera-device",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "用于 AI 模拟器工作台本地采集与回放的摄像机/NVR 演示设备",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

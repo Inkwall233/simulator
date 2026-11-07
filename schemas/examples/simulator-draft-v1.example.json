@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "skilllab.simulator-draft.v1",
+  "draftId": "demo-draft-v1",
+  "projectId": "demo-camera-project",
+  "draftVersion": 1,
+  "createdAt": "2026-11-07T00:00:00Z",
+  "status": "DRAFT",
+  "packageVersion": {
+    "id": "demo-package-v1",
+    "filename": "device-package.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "sizeBytes": 12000
+  },
+  "source": {
+    "type": "CAPTURED_TRAFFIC",
+    "apiDraftId": "demo-api-draft-v1",
+    "sessionId": "demo-session-v1"
+  },
+  "apiMocks": {
+    "rules": [
+      {
+        "id": "mock-device-read-v1",
+        "match": {
+          "method": "GET",
+          "path": "/api/device"
+        },
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "ok": true,
+          "device": {
+            "name": "前门网络摄像机",
+            "model": "SL-IPC-4200",
+            "resolution": "1920 × 1080",
+            "fps": 25,
+            "firmware": "V3.8.2-demo"
+          }
+        },
+        "requiresReview": true,
+        "source": {
+          "apiDraftId": "demo-api-draft-v1",
+          "endpointId": "endpoint-device-read"
+        }
+      },
+      {
+        "id": "mock-recordings-read-v1",
+        "match": {
+          "method": "GET",
+          "path": "/api/recordings"
+        },
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "ok": true,
+          "range": "7d",
+          "total": 1,
+          "recordings": [
+            {
+              "id": "rec-1001",
+              "name": "入口区域 · 上午",
+              "startTime": "2026-11-04 08:15:22",
+              "duration": 126,
+              "size": "24.8 MB",
+              "playCount": 0
+            }
+          ]
+        },
+        "requiresReview": true,
+        "source": {
+          "apiDraftId": "demo-api-draft-v1",
+          "endpointId": "endpoint-recordings-read"
+        }
+      }
+    ]
+  },
+  "stateModel": {
+    "initial": {
+      "session": null,
+      "recordingPlayCounts": {
+        "rec-1001": 0
+      }
+    },
+    "transitions": []
+  },
+  "workflows": [
+    {
+      "id": "practice-open-recordings",
+      "title": "查看录像列表",
+      "description": "进入录像回放页面并检查录像列表。",
+      "mode": "PRACTICE",
+      "steps": [
+        {
+          "id": "open-recordings-tab",
+          "title": "进入录像回放",
+          "description": "点击设备导航中的“录像回放”。",
+          "locator": {
+            "strategy": "CSS",
+            "value": "[data-view=\"recordings\"]"
+          },
+          "expectedMatches": 1,
+          "action": "HIGHLIGHT",
+          "expectedResult": "录像文件表格显示设备录像。",
+          "reviewStatus": "NEEDS_REVIEW"
+        }
+      ]
+    }
+  ],
+  "playbackAdapters": [
+    {
+      "id": "camera-recording-player",
+      "type": "IMAGE_SEQUENCE",
+      "status": "NEEDS_REVIEW",
+      "assetIds": [],
+      "notes": "演示设备没有真实视频帧；回放媒体资源需后续补充。"
+    }
+  ],
+  "review": {
+    "status": "NEEDS_REVIEW",
+    "notes": [
+      "样例响应只证明字段形状，不足以推断登录、保存配置和播放计数的完整状态迁移。",
+      "所有规则、步骤定位和媒体适配均需人工审查。"
+    ],
+    "reviewer": null,
+    "reviewedAt": null
+  }
+}

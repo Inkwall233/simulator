@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   aiRequest,
   clearAdminKey,
+  getSimulatorDraft,
   fetchScreenshot,
   getSavedAdminKey,
   saveAdminKey,
@@ -11,7 +12,9 @@ import {
   type DeviceProject,
   type NetworkEntry,
   type PackageVersion,
-  type PendingApproval
+  type PendingApproval,
+  type SimulatorDraft,
+  createSimulatorDraft as createSimulatorDraftRequest
 } from '@/api/ai-workbench'
 
 const projects = ref<DeviceProject[]>([])
@@ -34,8 +37,12 @@ const screenshotUrl = ref('')
 const network = ref<NetworkEntry[]>([])
 const approvals = ref<PendingApproval[]>([])
 const apiDraft = ref<Record<string, unknown> | null>(null)
+const apiDraftId = ref('')
 const apiDraftEndpointCount = ref(0)
 const creatingDraft = ref(false)
+const simulatorDraft = ref<SimulatorDraft | null>(null)
+const creatingSimulatorDraft = ref(false)
+const simulatorDrafts = ref<SimulatorDraft[]>([])
 const command = ref('')
 const typedText = ref('')
 const timeline = ref<Array<{ id: number; time: string; text: string; type: string }>>([])
@@ -57,12 +64,19 @@ onBeforeUnmount(() => {
 
 watch(selectedProjectId, async (id) => {
   latestPackage.value = null
+  simulatorDraft.value = null
+  simulatorDrafts.value = []
   if (!id) return
   try {
-    const detail = await aiRequest<DeviceProject>('/device-projects/' + id)
+    const [detail, savedDrafts] = await Promise.all([
+      aiRequest<DeviceProject>('/device-projects/' + id),
+      aiRequest<SimulatorDraft[]>('/device-projects/' + id + '/simulator-drafts')
+    ])
+    if (selectedProjectId.value !== id) return
     const index = projects.value.findIndex((item) => item.id === id)
     if (index >= 0) projects.value[index] = detail
     latestPackage.value = detail.packages?.[0] || null
+    simulatorDrafts.value = savedDrafts
   } catch (reason) {
     showError((reason as Error).message)
   }
@@ -131,6 +145,7 @@ async function uploadPackageFile() {
   busy.value = true
   try {
     latestPackage.value = await uploadPackage(selectedProjectId.value, selectedFile.value)
+    simulatorDraft.value = null
     addEvent('已上传并检查 ' + latestPackage.value.filename, 'success')
     selectedFile.value = null
     const input = document.querySelector<HTMLInputElement>('#ai-package-input')
@@ -146,7 +161,9 @@ async function connectDevice() {
   if (!selectedProjectId.value || !targetUrl.value.trim()) return
   if (session.value) await closeSession(false)
   apiDraft.value = null
+  apiDraftId.value = ''
   apiDraftEndpointCount.value = 0
+  simulatorDraft.value = null
   busy.value = true
   try {
     session.value = await aiRequest<BrowserSession>(
@@ -282,16 +299,40 @@ async function createApiDraft() {
   creatingDraft.value = true
   try {
     const result = await aiRequest<{
+      id: string
       endpointCount: number
       payload: Record<string, unknown>
     }>('/sessions/' + session.value.id + '/drafts', { method: 'POST' })
+    apiDraftId.value = result.id
     apiDraft.value = result.payload
     apiDraftEndpointCount.value = result.endpointCount
+    simulatorDraft.value = null
     addEvent('已生成 ' + result.endpointCount + ' 条接口 Mock 草稿，待人工审查', 'success')
   } catch (reason) {
     showError((reason as Error).message)
   } finally {
     creatingDraft.value = false
+  }
+}
+
+async function createSimulatorDraft() {
+  if (!selectedProjectId.value || !latestPackage.value || !apiDraftId.value) return
+  creatingSimulatorDraft.value = true
+  try {
+    simulatorDraft.value = await createSimulatorDraftRequest(
+      selectedProjectId.value,
+      latestPackage.value.id,
+      apiDraftId.value
+    )
+    simulatorDrafts.value = [
+      simulatorDraft.value,
+      ...simulatorDrafts.value.filter((item) => item.id !== simulatorDraft.value?.id)
+    ]
+    addEvent('已保存 Simulator 草稿 v' + simulatorDraft.value.versionNumber + '，待审核', 'success')
+  } catch (reason) {
+    showError((reason as Error).message)
+  } finally {
+    creatingSimulatorDraft.value = false
   }
 }
 
@@ -306,6 +347,35 @@ function downloadApiDraft() {
   URL.revokeObjectURL(url)
 }
 
+function downloadSimulatorDraft() {
+  if (!simulatorDraft.value?.payload) return
+  downloadJson(simulatorDraft.value.payload, 'skilllab-simulator-draft-v' + simulatorDraft.value.versionNumber + '.json')
+}
+
+async function downloadSavedSimulatorDraft(draft: SimulatorDraft) {
+  if (!selectedProjectId.value) return
+  try {
+    const fullDraft = draft.payload
+      ? draft
+      : await getSimulatorDraft(selectedProjectId.value, draft.id)
+    if (fullDraft.payload) {
+      downloadJson(fullDraft.payload, 'skilllab-simulator-draft-v' + fullDraft.versionNumber + '.json')
+    }
+  } catch (reason) {
+    showError((reason as Error).message)
+  }
+}
+
+function downloadJson(payload: Record<string, unknown>, filename: string) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 async function closeSession(showNotice = true) {
   const active = session.value
   if (!active) return
@@ -314,7 +384,9 @@ async function closeSession(showNotice = true) {
   approvals.value = []
   network.value = []
   apiDraft.value = null
+  apiDraftId.value = ''
   apiDraftEndpointCount.value = 0
+  simulatorDraft.value = null
   clearScreenshot()
   try {
     await aiRequest('/sessions/' + active.id + '/close', { method: 'POST' })
@@ -394,7 +466,7 @@ function sizeLabel(size: number) {
               <button class="wb-icon-button" title="刷新" @click="loadProjects">↻</button>
             </div>
             <label class="wb-label" for="ai-project-select">当前项目</label>
-            <select id="ai-project-select" v-model="selectedProjectId" class="wb-input">
+            <select id="ai-project-select" v-model="selectedProjectId" class="wb-input" :disabled="!!session || busy">
               <option value="">选择或新建项目</option>
               <option v-for="item in projects" :key="item.id" :value="item.id">{{ item.name }}</option>
             </select>
@@ -423,6 +495,13 @@ function sizeLabel(size: number) {
                 <small>SHA-256 {{ latestPackage.sha256.slice(0, 16) }}…</small>
                 <p v-if="latestPackage.scan?.rootPathReferenceHtml?.length" class="wb-compat-warning">发现根路径资源引用，发布前需要检查路径兼容性。</p>
                 <p v-else class="wb-compat-ok">ZIP 结构有效，包含 index.html。</p>
+              </div>
+              <div v-if="simulatorDrafts.length" class="wb-saved-drafts">
+                <span class="wb-label">已保存 Simulator 草稿</span>
+                <div v-for="draft in simulatorDrafts" :key="draft.id" class="wb-saved-draft-row">
+                  <span>v{{ draft.versionNumber }} · {{ draft.status }} · {{ draft.createdAt }}</span>
+                  <button class="wb-link-button" @click="downloadSavedSimulatorDraft(draft)">下载</button>
+                </div>
               </div>
             </div>
           </section>
@@ -495,12 +574,21 @@ function sizeLabel(size: number) {
                   {{ creatingDraft ? '生成中…' : '生成 Mock 草稿' }}
                 </button>
                 <button v-if="apiDraft" class="wb-secondary" @click="downloadApiDraft">下载 JSON</button>
+                <button v-if="apiDraft" class="wb-secondary" :disabled="busy || creatingSimulatorDraft || !latestPackage || !apiDraftId" @click="createSimulatorDraft">
+                  {{ creatingSimulatorDraft ? '保存中…' : '创建 Simulator 草稿' }}
+                </button>
+                <button v-if="simulatorDraft?.payload" class="wb-secondary" @click="downloadSimulatorDraft">下载 Simulator 草稿</button>
               </div>
             </div>
             <details v-if="apiDraft" class="wb-draft-preview">
               <summary>已生成 {{ apiDraftEndpointCount }} 条接口草稿 · 展开检查</summary>
               <pre>{{ JSON.stringify(apiDraft, null, 2) }}</pre>
               <p>规则来自观察到的请求样例，不是最终可发布的设备配置；请审查后再接入 Simulator。</p>
+            </details>
+            <details v-if="simulatorDraft?.payload" class="wb-draft-preview">
+              <summary>Simulator 草稿 v{{ simulatorDraft.versionNumber }} · {{ simulatorDraft.status }} · 待审核</summary>
+              <pre>{{ JSON.stringify(simulatorDraft.payload, null, 2) }}</pre>
+              <p>草稿已固定关联当前静态包和接口采集版本；此版本尚未部署到 Simulator。</p>
             </details>
             <div v-if="approvals.length" class="wb-approvals">
               <div v-for="item in approvals" :key="item.id" class="wb-approval">
