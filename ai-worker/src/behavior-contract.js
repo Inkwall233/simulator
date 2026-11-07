@@ -54,7 +54,7 @@ function canonicalPath(value) {
 
 export function validateBehaviorV2(payload) {
   if (!object(payload)) fail('Invalid behavior')
-  const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8')
+  const bytes = new TextEncoder().encode(JSON.stringify(payload)).length
   if (bytes > 1024 * 1024) fail('Behavior size limit exceeded')
   inspect(payload)
   onlyKeys(payload, ['schemaVersion', 'packageVersion', 'scope', 'initialState', 'rules', 'verificationCases'], 'behavior')
@@ -100,10 +100,7 @@ export function validateBehaviorV2(payload) {
     const current = payload.rules[index]
     for (const other of payload.rules.slice(index + 1)) {
       if (current.priority === other.priority && current.match.method === other.match.method
-          && current.match.path === other.match.path
-          && (!current.when || !other.when || JSON.stringify(current.when) === JSON.stringify(other.when)
-            || current.when.op === 'exists' || other.when.op === 'exists'
-            || current.when.op === 'type' || other.when.op === 'type')) {
+          && current.match.path === other.match.path) {
         fail('Ambiguous behavior rules')
       }
     }

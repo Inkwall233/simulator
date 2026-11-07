@@ -27,13 +27,16 @@ public class AiWorkbenchController {
     private final AiWorkerClient worker;
     private final AiApiDraftService drafts;
     private final AiSimulatorDraftService simulatorDrafts;
+    private final AiPreviewService previews;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
-            AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts) {
+            AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
+            AiPreviewService previews) {
         this.service = service;
         this.worker = worker;
         this.drafts = drafts;
         this.simulatorDrafts = simulatorDrafts;
+        this.previews = previews;
     }
 
     @GetMapping("/device-projects")
@@ -58,6 +61,44 @@ public class AiWorkbenchController {
         return simulatorDrafts.createDraft(projectId, request);
     }
 
+    @PostMapping("/device-projects/{projectId}/simulator-drafts/v2")
+    public Map<String, Object> createSimulatorDraftV2(
+            @PathVariable String projectId, @RequestBody Map<String, Object> request) {
+        return simulatorDrafts.createDraftV2(projectId, request);
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-drafts/{draftId}/import-v1")
+    public Map<String, Object> importSimulatorDraftV1(
+            @PathVariable String projectId, @PathVariable String draftId) {
+        return simulatorDrafts.importV1(projectId, draftId);
+    }
+
+    @PostMapping("/sessions/{sessionId}/simulator-behavior")
+    public Map<String, Object> proposeSimulatorBehavior(@PathVariable String sessionId,
+            @RequestBody Map<String, Object> request) {
+        Map<String, Object> captured = drafts.latestDraft(sessionId);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) captured.get("payload");
+        java.util.Map<String, Object> input = new java.util.LinkedHashMap<String, Object>();
+        java.util.Map<String, Object> capture = new java.util.LinkedHashMap<String, Object>();
+        java.util.List<Map<String, Object>> rules = new java.util.ArrayList<Map<String, Object>>();
+        for (Object raw : (List<?>) payload.get("mockRules")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rule = new java.util.LinkedHashMap<String, Object>((Map<String, Object>) raw);
+            java.util.Map<String, Object> source = new java.util.LinkedHashMap<String, Object>();
+            source.put("apiDraftId", captured.get("id"));
+            source.put("endpointId", rule.get("id"));
+            rule.put("source", source);
+            rules.add(rule);
+        }
+        capture.put("mockRules", rules);
+        input.put("capture", capture);
+        input.put("goal", request.get("goal"));
+        Map<String, Object> result = worker.post("/internal/simulator-behavior", input);
+        result.put("apiDraftId", captured.get("id"));
+        return result;
+    }
+
     @GetMapping("/device-projects/{projectId}/simulator-drafts")
     public List<Map<String, Object>> listSimulatorDrafts(@PathVariable String projectId) {
         return simulatorDrafts.listDrafts(projectId);
@@ -68,6 +109,13 @@ public class AiWorkbenchController {
             @PathVariable String projectId,
             @PathVariable String draftId) {
         return simulatorDrafts.getDraft(projectId, draftId);
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-drafts/{draftId}/preview")
+    public Map<String, Object> createSimulatorPreview(
+            @PathVariable String projectId,
+            @PathVariable String draftId) {
+        return previews.createPreview(projectId, draftId);
     }
 
     @PostMapping(value = "/device-projects/{projectId}/packages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
