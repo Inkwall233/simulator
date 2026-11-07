@@ -1,151 +1,178 @@
-# Device Simulator Authoring and Runtime Design
+# 设备模拟器制作与运行设计
 
-Status: Awaiting user approval. This is a design, not authorization to implement.
+状态：等待用户批准。本文是设计文档，不代表已获准实施。
 
-## Intent
+## 一、设计目的
 
-Let authors upload a real device Web package, capture selected capabilities on an authorized device, and use AI to turn the evidence into a runnable simulator. The finished simulator is used inside SkillLab. Authoring a simulator is independent of configuring exercises or exams.
+让制作者上传真实设备 Web 包，在获授权的设备上采集指定功能，再由 AI 将采集证据整理为可运行的模拟器。制作完成的模拟器在 SkillLab 系统内使用。模拟器制作与练习、考试配置相互独立。
 
-The motivating example is AucSeek configuration: read the setting, enable or disable it, save, and read back the saved value. Detection and search after enabling are outside this example's scope. No real AucSeek package or capture is currently available; repository demo devices can validate the platform, not vendor fidelity.
+示例是 AucSeek 配置：读取设置、开启或关闭、保存、再次读取保存值。开启后的检测和搜索不在示例范围内。目前没有真实 AucSeek 设备包和采集材料；仓库演示设备只能验证平台流程，不能证明厂商行为还原度。
 
-## Confirmed Requirements
+## 二、已确认需求
 
-- Keep the upload and real-device capture workflow; do not substitute AI-generated device pages.
-- Support partial device capabilities rather than requiring a complete device clone.
-- AI participates only during authoring. Normal usage executes frozen rules without model calls, model credentials, or live-device dependencies.
-- Prefer captured behavior. AI may propose inferred behavior and recommend additional capture.
-- Permit system use when the critical read/write chain is supported by capture and passes validation, even if abnormal branches remain unconfirmed inferences.
-- Preserve evidence and inference labels after a version becomes usable.
-- Each usage has isolated state. Refreshes within it retain changes; ending it and starting again restores initial state.
-- Continue using Service Worker as the HTTP interception mechanism, with a fixed interpreter for AI-authored behavior data.
+- 保留上传设备包和真实设备采集流程，不用 AI 生成的页面替代设备包。
+- 支持只制作部分设备能力，不要求完整复刻整台设备。
+- AI 只参与制作。正常使用执行固定规则，不调用模型、不需要模型凭证、不依赖真实设备。
+- 优先使用采集证据；允许 AI 提出行为推断和补采集建议。
+- 关键读写链路有采集依据且验证通过时，即使部分异常分支仍是待确认推断，也允许在系统中使用。
+- 版本可用后仍保留采集依据和推断标记。
+- 每次使用的状态独立；同一次使用中刷新保留变化，结束后重新启动恢复初始状态。
+- 继续使用 Service Worker 拦截 HTTP 请求，由固定解释器执行 AI 生成的声明式行为数据。
 
-## Goals and Non-Goals
+## 三、目标与边界
 
-Goals: a complete authoring-to-system-use path, conditional API behavior, stateful configuration read/write, explicit capability boundaries, repeatable validation, immutable usable versions, and isolation between users and runs.
+目标：贯通制作到系统使用的流程，支持条件分支、有状态配置读写、明确的能力范围、可重复验证、不可变的可用版本，以及不同使用者和不同运行之间的状态隔离。
 
-Non-goals: exercise configuration, guidance overlays, scoring, exam orchestration, standalone website exports, arbitrary AI-generated executable code, complete vendor compatibility, WebSocket emulation, native plugins, hardware detection/search effects, and production-scale worker scheduling.
+不纳入本轮：练习配置、引导浮层、评分、考试编排、独立网站导出、AI 任意可执行代码、全部厂商兼容、WebSocket 模拟、原生插件、硬件检测或搜索效果，以及生产规模的 Worker 调度。
 
-Anti-goals: treating HTTP 200 as proof of a saved change; silently inventing vendor behavior; forwarding missing requests to a real device; resetting state when a Service Worker is reclaimed; retaining a previous user's state; or making model availability a runtime dependency.
+必须避免：把 HTTP 200 当作保存成功的充分证据；隐瞒推断；将未匹配请求转发给真实设备；Service Worker 被回收时丢失本次状态；继承上一个使用者的状态；使用阶段依赖模型服务。
 
-## Current Baseline
+## 四、当前实现基础
 
-- Vue admin workbench accepts ZIPs, captures device traffic, generates API drafts, requests AI behavior proposals, and edits behavior as JSON.
-- Java stores immutable SimulatorDraft revisions with package and capture references.
-- Worker serves derived package copies at isolated temporary origins and injects a Service Worker bootstrap.
-- Mock runtime currently matches method/path, renders state tokens, and supports limited transitions including request-field assignment. State is only in Worker memory.
-- Request bodies are not retained. Multiple observations are collapsed into endpoint samples, losing evidence of response branches.
-- The general simulator view still uses a hardcoded demo package and same-origin bridge. It does not load published simulator versions.
-- Existing worktree changes are an uncommitted prototype. They must be audited and adapted, not treated as completed architecture or overwritten wholesale.
+- Vue 管理端已支持 ZIP 上传、设备流量采集、API 草稿、AI 行为建议，以及 JSON 行为编辑。
+- Java 后端保存不可变的 SimulatorDraft 修订，并关联设备包和采集版本。
+- Worker 在隔离的临时 origin 下提供派生包，并注入 Service Worker 启动脚本。
+- Mock 运行时目前按请求方法和路径匹配，支持状态模板和有限迁移，包括请求字段赋值；状态只保存在 Service Worker 内存中。
+- 当前不保留请求正文，多次观察会合并为接口样例，无法完整保留响应分支证据。
+- 通用仿真器页面仍使用硬编码演示包和同源桥接，尚不能加载正式模拟器版本。
+- 工作区已有未提交原型改动，实施时需审查并适配，不能视为已完成架构，也不能整体覆盖。
 
-## Approaches
+## 五、方案比较
 
-### A. Declarative Behavior Model and Fixed Runtime (Selected)
+### 方案 A：声明式行为模型与固定运行时（已选择）
 
-AI produces typed request matchers, conditions, state transitions, response templates, and missing-evidence notes. A platform-owned interpreter validates and executes them through Service Worker. Reuses current architecture, enables deterministic validation, and restricts untrusted output. Complex unsupported behavior requires platform adapters, not arbitrary scripts.
+AI 生成带类型的请求匹配、条件、状态迁移、响应模板和证据缺失说明。平台解释器校验后通过 Service Worker 执行。该方案复用现有架构，便于确定性验证，并限制不可信输出。超出表达能力的复杂行为通过平台适配器扩展，不执行任意脚本。
 
-### B. AI-Generated Per-Simulator Backend (Not Selected)
+### 方案 B：AI 生成每个模拟器的专用后端（未选择）
 
-Generated code runs in separate server sandboxes. More expressive for special protocols but adds code isolation, dependency management, vulnerability review, deployment, and scheduling costs. Not justified for the first configuration read/write chain.
+生成代码在独立服务端沙箱运行，特殊协议的表达能力更强，但增加代码隔离、依赖管理、漏洞审查、部署和调度成本。首条配置读写链路暂不需要这套复杂度。
 
-The user accepted A and clarified that authoring-only AI is a hard boundary. This is not a static-response-only approach.
+用户已接受方案 A，并明确 AI 仅制作时参与。这不是只返回静态响应的方案。
 
-## Authoring and Evidence
+## 六、制作流程与证据
 
-1. Upload and analyze a package; preserve the original ZIP and hash. Derived artifacts never overwrite it.
-2. Describe the capability scope and prerequisites. Select captured endpoints to include; login/navigation prerequisites may be shared capabilities.
-3. Capture initial reads, mutations, and subsequent reads. Suggest missing branches without automatically triggering dangerous writes or intentionally damaging a device.
-4. AI proposes rules, state fields, branch conditions, evidence references, and a supplement-capture checklist. Treat all package content and capture content as untrusted data, not model instructions.
-5. The author reviews structured interface rules and state mappings, with JSON as an advanced view, then saves a new revision.
-6. Run isolated preview and validation; correct or supplement capture as needed.
-7. Explicitly enable a frozen simulator version for system use, accepting recorded nonblocking uncertainties.
+1. 上传并分析设备包，保留原始 ZIP 与哈希；派生产物不覆盖原始包。
+2. 描述能力范围和前置条件，选择纳入的采集接口；登录、导航等前置能力可以复用。
+3. 采集初始读取、修改、修改后读取；发现缺失分支时建议补采集，不自动执行危险写操作或故意制造设备故障。
+4. AI 提出规则、状态字段、分支条件、证据引用和补采集清单。设备包与采集内容均是不可信数据，不能作为模型指令。
+5. 制作者在结构化编辑器中审阅接口和状态映射，JSON 作为高级视图，然后保存新修订。
+6. 运行隔离预览和验证，按结果修正或补采集。
+7. 制作者明确确认报告及非阻断不确定项，将固定版本启用供系统使用。
 
-Capture must preserve bounded, ordered request/response observations rather than only endpoint aggregates. Store method, normalized path, selected query/body fields, status, content type, redacted response sample, timing/order, capture/session IDs, and truncation/redaction markers.
+采集需保存有大小限制、按顺序排列的请求与响应观察，而不仅是接口汇总。字段包括方法、规范化路径、选定的查询参数和正文字段、状态码、内容类型、脱敏响应样例、时间与顺序、采集和会话 ID，以及截断、脱敏标记。
 
-Builder decision: request field capture is opt-in per capture scope. Apply field allowlists plus sensitive-field denial/redaction, never retain passwords, cookies, authorization values, or session tokens. Bound individual retained payloads to 64 KiB. Redacted or truncated values cannot be used as executable rule evidence. Do not send raw secrets to a model. Authentication can use synthetic session state; vendor token values are not reused. Author approval remains mandatory for real-device write requests.
+实施建议：请求字段按采集范围显式选择后才保留。同时执行字段白名单和敏感字段拒绝、脱敏，禁止保留密码、Cookie、Authorization 值和会话令牌。单个保留载荷不超过 64 KiB。被脱敏或截断的值不能直接作为可执行规则依据，不向模型发送原始秘密。模拟登录使用合成会话状态，不复用厂商令牌。真实设备写请求仍需制作者批准。
 
-Evidence labels: CAPTURED, INFERRED_PENDING, INFERRED_CONFIRMED. CAPTURED means supported by referenced observations, not guaranteed universal correctness. An inferred rule remains identifiable after confirmation. Later evidence produces a new revision; old versions and reports remain unchanged.
+证据分类如下：
 
-## Behavior Contract
+- `CAPTURED`：采集支持，有引用观察作为依据，但不代表适用于所有情况。
+- `INFERRED_PENDING`：AI 推断，尚未人工确认。
+- `INFERRED_CONFIRMED`：人工确认的推断，仍可识别其非采集来源。
 
-Introduce a versioned v2 contract rather than silently changing v1 semantics. Preserve v1 reading and provide deterministic import into v2; never mutate old saved payloads. Do not carry practice/exam workflow fields into the new runtime contract.
+新增证据形成新修订，旧版本与旧报告保持不变。
 
-A simulator revision includes package identity/hash, capability scopes, initial typed state, ordered rules, source references, inference notes, supported runtime version, and declared verification cases.
+### 制作工作台交互
 
-A rule includes:
+工作台围绕“设备包 → 范围与采集 → 行为制作 → 验证 → 版本”组织为可往返的项目内视图。每一步保留当前项目、包版本、采集范围和草稿修订的上下文；用户可以返回补采集或修正规则，不必重新开始。界面首先呈现当前制作进度和阻断问题，而不是以聊天记录或原始请求流水作为主导航。
 
-- Stable ID and explicit priority; method and exact normalized path.
-- Optional query/body predicates and state prerequisites.
-- Response status, allowed headers, content type, and typed response template.
-- Restricted state operations and evidence references.
+| 视图 | 主要操作 | 必须可见的信息 |
+| --- | --- | --- |
+| 设备包 | 上传、选择不可变包版本，检查资源和入口兼容性 | 包名、哈希、分析结果、阻断问题 |
+| 范围与采集 | 描述本次要模拟的能力，选择前置链路，操作获授权的真实设备并补采集 | 明确的“真实设备”标识、目标范围、请求与响应证据、写操作逐次审批、敏感字段脱敏和缺失证据 |
+| 行为制作 | 请求 AI 提案，审阅接口分支、状态变化、证据及推断，人工修正后保存新修订 | 每条规则的来源、采集与推断分类、变更差异、未解决问题；结构化编辑为默认方式，JSON 仅为高级方式 |
+| 验证 | 在隔离模拟器中试运行和执行工程检查，按失败项返回制作或采集 | 明确的“模拟环境”标识、读写与读回结果、状态变化、未匹配请求、脚本错误、外部请求阻断及报告所绑定的精确修订 |
+| 版本 | 查看历史修订和报告、确认非阻断不确定项、启用或停用固定版本 | 可用性、阻断项、保留的推断标记、包和行为哈希、运行时版本、当前启用版本 |
 
-Builder decision: first-release predicates are equality, existence, type, membership, and numeric range, composed with all/any/not. Operands reference constants, request query/body fields, or state fields through safe structured paths. No eval, functions, arbitrary expressions, network commands, regex supplied by models, or unrestricted header access. Define missing versus null explicitly. Decode URL/form inputs once; conversions must be declared. Reject ambiguous equal-priority rules and unknown operators before saving or running.
+真实设备操作界面与模拟器试运行界面必须在标题、环境标识和写操作反馈上清晰区分；从一个环境进入另一个环境须有明确切换。真实设备的写操作审批不能被模拟器中的按钮样式或 AI 建议绕过。用户在制作视图中查看、筛选和关联采集证据，原始请求流水保留为细节面板，不作为完成制作的唯一操作路径。
 
-Operations are typed SET, SET_FROM_REQUEST, MERGE, and INCREMENT. Disallow prototype-related paths and unsafe object keys recursively; enforce state, rule, depth, and request size limits. Bind read templates to persisted state, not the last captured sample. Validate all paths and referenced rules on server and runtime using shared contract fixtures.
+AI 在采集视图可以协助获授权的页面探索，在行为制作视图负责提出或修改模型；这两类动作应分开呈现。AI 提案先显示与当前修订的差异、依据和缺失信息，用户确认后才保存新修订；取消提案不改变已有版本。没有配置模型时，人工制作和验证仍可用。验收与启用按钮只受验证报告及权限控制，不因 AI 声称“完成”而开放。系统内的普通模拟器使用页面不显示 AI 对话、规则编辑或诊断面板。
 
-For each request: identify run and version, parse bounded input, choose the highest-priority matching rule against pre-request state, calculate next state, validate/render response, atomically commit state, then emit diagnostic metadata. Failure to parse, validate, render, or persist must not partially update state or report save success. Only explicitly declared successful mutations commit changes. Device-like error branches preserve state unless explicitly modeled otherwise.
+## 七、行为协议
 
-Unknown API requests fail closed with a clear unavailable result and diagnostic event. Never forward them to devices or synthesize success. Static resources may be served only from the immutable derived package. Use an explicit package asset manifest/API boundary, not only API path heuristics. Unsupported vendor absolute URLs require reviewed declarative origin/path adaptation; external network access is blocked by default. Missing critical adapters block usability. No arbitrary package rewrite scripts from AI.
+引入版本化 v2 协议，不静默改变 v1 语义。保留 v1 读取能力，提供确定性的 v2 导入，不修改已保存的旧载荷。新运行协议不携带练习或考试流程字段。
 
-## Versions and Validation
+模拟器修订包括设备包标识和哈希、能力范围、带类型初始状态、有序规则、来源引用、推断说明、适用运行时版本，以及明确的验证用例。
 
-Separate editable authoring records, immutable draft revisions, validation reports, and usable simulator versions. A usable version pins package hash, behavior revision/hash, derived artifact hash, interpreter version, and report. Changing any input requires a new version/report.
+每条规则包括：
 
-Authoring status: DRAFT -> VALIDATING -> VALIDATION_FAILED or VALIDATED -> ENABLED. ENABLED means available for system use, not fully faithful or fully reviewed. Disabling a version prevents new runs; active runs remain pinned until ended unless explicitly revoked for safety.
+- 稳定 ID、明确优先级、请求方法和精确规范化路径。
+- 可选的查询参数、请求正文条件和状态前置条件。
+- 响应状态、允许的响应头、内容类型、带类型响应模板。
+- 受限状态操作与证据引用。
 
-Blocking findings: malformed/unsafe contract, package boot failure, required resources missing, critical read/write verification failure, inferred-only critical behavior, state isolation failure, or external device/network dependencies. Nonblocking findings: unconfirmed inferred abnormal branches, unimplemented out-of-scope capabilities, and noncritical compatibility limitations. Enabling requires explicit author acknowledgement of the report and uncertainties.
+实施建议：首版条件支持相等、存在、类型、集合成员和数值范围，通过 `all`、`any`、`not` 组合。操作数通过安全结构化路径引用常量、请求查询或正文字段、状态字段。禁止 `eval`、函数、任意表达式、网络命令、模型提供的正则表达式和无限制请求头访问。区分字段缺失与 `null`。URL 和表单只解码一次，类型转换必须显式声明。保存和运行前拒绝同优先级歧义规则及未知操作符。
 
-Verification cases are simulator engineering checks, not learner tasks or scoring. The author identifies critical capabilities; the report must cover their claimed initial read, successful mutation, read-back, inverse mutation where supported, refresh retention, and reset on a fresh run. Required prerequisites must also work. Captured cases need explicit expected values/assertions. AI may propose cases but cannot declare its own assertions correct without author review.
+状态操作包括带类型的 `SET`、`SET_FROM_REQUEST`、`MERGE`、`INCREMENT`。递归拒绝原型相关路径和危险对象键，限制状态大小、规则数量、嵌套深度和请求大小。读取模板绑定本次运行持久化状态，不绑定最后一次采集样例。后端与运行时用共同协议样例验证路径和规则引用。
 
-Reports record case results, matched rules, unmatched APIs, console/runtime errors, external request violations, and assumptions. Run in isolated contexts with real-device egress blocked. Reports are bound to exact artifact inputs. Browser automation uses bounded declarative navigation/actions, not model-generated code.
+每次请求依次执行：识别运行实例和版本，解析受限输入，按请求前状态选择最高优先级匹配规则，计算下一状态，校验并渲染响应，原子提交状态，最后发送诊断元数据。解析、校验、渲染或存储失败都不能产生部分更新，也不能报告保存成功。只有明确声明的成功修改才提交变化；错误分支默认保留状态，除非模型明确描述了其他设备行为。
 
-## System Runtime, No AI
+未知 API 返回明确的不可用结果并记录诊断，禁止转发真实设备或伪造成功。静态资源只来自不可变派生包。通过显式资源清单与 API 边界区分请求，不只依赖路径猜测。厂商绝对 URL 需经审阅的声明式 origin 和路径适配；默认阻止外部网络访问。缺少关键适配器阻止版本可用，不执行 AI 生成的任意包改写脚本。
 
-The simulator shell accepts a usable version ID, requests an authorized run, and embeds its dedicated origin. Existing demo guidance modes are not part of this new route. Old demo routes can remain separate.
+## 八、版本与验证
 
-A RunInstance records run ID, exact version/runtime IDs, authorized owner/access context, status, expiry, and dedicated origin. It is not an AI session and does not require a per-user backend process. The fixed runtime and shared immutable artifacts can be served by a common service.
+区分可编辑制作记录、不可变草稿修订、验证报告和可用模拟器版本。可用版本固定设备包哈希、行为修订及哈希、派生产物哈希、解释器版本和报告。任一输入变化都需新版本和新报告。
 
-Each run has an unguessable dedicated origin, keeping uploaded scripts, cookies, local storage, caches, IndexedDB, and Service Worker scope separate from other runs and platform shells. Production requires a separate registrable runtime domain, wildcard DNS/TLS, no shared parent-domain cookies, and authenticated launch. Local *.localhost is a development equivalent only.
+制作状态：`DRAFT`（草稿）→ `VALIDATING`（验证中）→ `VALIDATION_FAILED`（验证失败）或 `VALIDATED`（验证通过）→ `ENABLED`（已启用）。已启用表示可在系统使用，不表示完整还原或全部审核。停用阻止创建新运行；已有运行保持原版本直到结束，安全原因显式撤销除外。
 
-Startup must wait for platform Service Worker control before package scripts run. Unknown packages are not trusted with platform credentials. Apply CSP and sandbox restrictions; validate message origin, source, run ID, and message schema in the shell. The runtime surface exposes no model endpoints or keys and no worker-internal control APIs.
+阻断项：协议无效或不安全、设备包启动失败、必要资源缺失、关键读写验证失败、关键行为仅有推断、状态隔离失败，或仍依赖真实设备及外部网络。
 
-Persist simulated state in per-run IndexedDB. Use short readwrite transactions and version/revision checks for atomic read-modify-write across Worker restarts and multiple tabs of the same run. Rule execution inside the transaction is synchronous and bounded; no network/model waits. Initialization creates state only if absent. On quota/storage failure, fail visibly without claiming save success. IndexedDB is browser-local operational state, not secure exam evidence; anti-cheating and scoring are separate work.
+非阻断项：异常分支仍为待确认推断、范围外能力未实现、非关键兼容限制。启用时需制作者明确确认报告和不确定项。
 
-Refreshing or reloading the same authorized run resumes it. Device logout changes only simulated login state, not saved configuration. Ending a run invalidates its lease, unmounts the frame, and best-effort clears its storage and registration. Starting again always allocates a new run/origin from initial state; never reuse expired IDs. Tab closure is not reliable proof of end: use best-effort notifications plus a lease/heartbeat and eventual cleanup. Runtime checks an active lease before serving simulated API operations and fails closed after expiry; browser timers and cached pages are not authority to resume an ended run.
+验证用例是模拟器工程检查，不是学员任务或评分。制作者标记关键能力；报告需覆盖声明的初始读取、成功修改、读取确认、支持时的反向修改、刷新保持，以及新运行重置。必要前置能力也必须可用。采集用例需明确期望值与断言；AI 可以建议用例，不能未经人工审阅就认定自己的断言正确。
 
-Builder defaults for approval: heartbeat every 30 seconds, 10-minute inactivity lease, and an 8-hour absolute maximum. The visible system shell owns explicit end/restart. Resuming after reload is allowed only while the same lease remains valid. Deployments can configure limits later; changing these does not imply AI activity.
+报告记录用例结果、命中规则、未匹配 API、控制台与运行时错误、外部请求违规和假设。验证在阻止真实设备出站访问的隔离上下文运行，报告绑定精确产物。浏览器自动化使用有边界的声明式导航和动作，不执行模型生成代码。
 
-## Architecture and Ownership
+## 九、系统内运行，不使用 AI
 
-- Admin Vue: scope selection, capture review, evidence-aware behavior editing, AI proposals, preview diagnostics, reports, and enable/version actions.
-- Java: package/capture/revision/report/version/run persistence, authorization, immutable references, lifecycle transitions, and worker requests.
-- Worker: capture browser, authoring model calls, package preparation/serving, bounded validation runner. Split authoring/internal routes from public runtime hosting.
-- Runtime: fixed behavior interpreter, Service Worker request interception, IndexedDB state, and narrow shell events.
-- Simulator Vue: authorized version launch, run lifecycle and isolated frame, without AI or teaching configuration.
+仿真器控制壳接收可用版本 ID，申请获授权的运行实例，嵌入其独立 origin。新路由不包含现有演示引导模式，旧演示路由可独立保留。
 
-Retain Vue 3, Spring Boot, Node/Playwright, and existing repository storage patterns initially. This is a builder recommendation, not a user technology mandate. Runtime registration/lease metadata must survive service restart in persisted storage; never depend solely on the current worker's in-memory preview registry for usable versions. Live browser runtime state need not survive device/browser storage clearing and must never leak into a new run.
+`RunInstance`（运行实例）记录运行 ID、固定版本和运行时 ID、获授权的使用者及访问上下文、状态、到期时间和独立 origin。它不是 AI 会话，也不要求为每个使用者启动后端进程。固定运行时和共享不可变产物可由公共服务提供。
 
-## Security and Release Boundaries
+每次运行使用不可猜测的独立 origin，将上传脚本、Cookie、Local Storage、缓存、IndexedDB 和 Service Worker 作用域与其他运行及系统控制壳隔离。生产环境需独立可注册运行域名、泛域名 DNS/TLS、不共享父域 Cookie，并校验启动权限。本地 `*.localhost` 仅作为开发等价环境。
 
-Current shared author key and H2/local files are restricted single-machine pilot infrastructure. Introduce a platform authorization adapter for launch/ownership checks; absent end-user identity, only authenticated author test runs are allowed, not anonymous candidate rollout. Full exam integration and identity rollout are separate, but launch endpoints must not accept arbitrary client-asserted ownership.
+设备包脚本运行前，启动流程必须等待平台 Service Worker 接管。不向未知包授予平台凭证。使用 CSP 和 iframe sandbox 限制；控制壳校验消息 origin、source、运行 ID 和结构。运行服务不暴露模型接口、密钥或 Worker 内部控制 API。
 
-Never expose uploaded content at a platform origin or model secrets in bundles. Restrict authoring Worker egress independently of app allowlists. Unknown packages cannot register their own replacement workers or access parent credentials; define and test reserved runtime paths and worker-src policy. Diagnose compatibility failures rather than weakening isolation. Dedicated origins protect platform users but do not prove arbitrary package code benign.
+模拟状态保存在每次运行独立的 IndexedDB。使用短时 `readwrite` 事务和版本检查，保证 Service Worker 重启、同一运行多标签页时读改写的原子性。事务内规则执行同步且有界，不等待网络或模型。初始化只在状态不存在时创建。容量或存储失败需明确报错，不谎报保存成功。IndexedDB 是浏览器本地运行状态，不是可信考试证据，防作弊和评分另行设计。
 
-## Acceptance
+刷新或重新加载同一有效运行可恢复状态。设备页面退出登录只改变模拟登录状态，不清空已保存配置。结束运行使租约失效、卸载 iframe，并尽力清理存储和注册。重新启动总是分配新运行和新 origin，从初始状态开始，不复用过期 ID。
 
-1. The repository demo ZIP goes through upload, captured read/write observations, AI-assisted or manual modeling, validation, enable, and simulator-shell launch.
-2. A configuration can be enabled, saved, read back, disabled, and saved again; a Worker restart and page refresh preserve same-run state.
-3. Two runs of one version never share state; ending/restarting resets state, including vendor storage. Device logout does not reset configuration.
-4. Model service and real-device service can be unavailable throughout normal usage; no AI/live-device requests occur.
-5. Missing APIs do not silently succeed or reach a device. Failed mutations do not change state.
-6. Captured/inferred branches remain distinguishable. Pending abnormal inferences can be enabled with acknowledgement; missing critical evidence cannot.
-7. Changed behavior/package/runtime invalidates old validation for the new candidate but does not mutate existing versions or runs.
-8. Invalid conditions, unsafe paths, ambiguous rules, oversized data, unauthorized launch, expired leases, and cross-origin messages are rejected.
-9. No exercise prompts, hints, grading, or completion logic is introduced.
+关闭标签页无法可靠证明运行结束，因此采用尽力发送结束通知、心跳租约和最终清理。运行时在响应模拟 API 前确认租约有效，过期后拒绝继续；浏览器计时器和缓存页面不能作为恢复已结束运行的授权依据。
 
-## Implementation Sequencing Boundary
+待确认默认值：每 30 秒续期，10 分钟未续期失效，最长运行 8 小时。系统控制壳提供显式结束和重新启动。刷新后仅允许恢复仍有效的同一次运行。后续可按部署配置调整，这些机制不涉及 AI。
 
-After design approval, the implementation plan should sequence contract/evidence changes, deterministic interpreter tests, run persistence/isolation, authoring review, validation/version enablement, then simulator-shell integration and demo end-to-end verification. Audit and reuse the prototype where it fits. Do not claim AucSeek compatibility without a real package and evidence.
+## 十、架构与职责
 
-## Builder Decisions to Confirm in Review
+- 管理端 Vue：范围选择、采集审阅、证据关联的行为编辑、AI 建议、预览诊断、报告、版本启用操作。
+- Java 后端：设备包、采集、修订、报告、版本与运行持久化，权限校验，不可变关联，生命周期与 Worker 请求。
+- Worker：采集浏览器、制作阶段模型调用、设备包准备与服务、有边界验证执行器；制作和内部路由与公开运行托管分离。
+- 运行时：固定行为解释器、Service Worker 拦截、IndexedDB 状态和受限控制壳事件。
+- 仿真器 Vue：获授权的版本启动、运行生命周期、隔离 iframe，不包含 AI 或教学配置。
 
-Proposed defaults: opt-in redacted request-field capture; v2 contract with v1 import; structured editor plus advanced JSON; conservative predicate/operator set; per-run IndexedDB; explicit leases and dedicated origins; immutable enabled versions; restricted author pilot before candidate identity integration. UI layouts and detailed endpoint names are left to implementation planning within these constraints.
+实施建议：初期沿用 Vue 3、Spring Boot、Node/Playwright 和现有存储模式，而非用户指定必须使用这些技术。运行注册和租约元数据持久化，需能跨服务重启恢复；可用版本不能依赖当前 Worker 内存预览注册表。浏览器状态不保证在用户清空存储后恢复，但不能泄漏到新运行。
+
+## 十一、安全与开放边界
+
+当前共享制作密钥、H2 和本地文件仅适合受限单机试点。启动与归属校验需接入平台权限适配层；缺少终端用户身份时，只允许已认证制作者试运行，不开放匿名考生使用。完整考试与身份接入是独立工作，但启动接口不能接受客户端任意声明的归属。
+
+上传内容不能在平台 origin 下托管，前端包不能包含模型秘密。制作 Worker 的出站限制不能只依赖应用白名单。未知包不能注册替代平台的 Worker 或访问父页面凭证；需定义并验证保留运行路径与 `worker-src` 策略。兼容问题应被诊断，而非通过削弱隔离解决。独立 origin 保护平台使用者，但不证明任意设备包脚本无害。
+
+## 十二、验收标准
+
+1. 仓库演示 ZIP 贯通上传、读写采集、AI 辅助或人工建模、验证、启用、仿真器启动。
+2. 配置可开启、保存、读取确认、关闭、再次保存；Service Worker 重启和页面刷新保留同次运行状态。
+3. 同版本的两个运行互不共享状态；结束后重新启动重置状态，包括设备包自有存储；设备退出登录不重置配置。
+4. 正常使用期间模型与真实设备服务均可关闭，不发生 AI 或真实设备请求。
+5. 缺失 API 不静默成功，不访问真实设备；失败修改不改变状态。
+6. 采集与推断分支可区分；待确认异常推断经明确确认可启用，缺少关键证据则不可启用。
+7. 行为、设备包或运行时变化使新候选版本需重新验证，不修改已有版本及其运行。
+8. 拒绝无效条件、危险路径、歧义规则、超限数据、未授权启动、过期租约和非法跨域消息。
+9. 不新增练习提示、引导、评分或任务完成逻辑。
+10. 制作者能在五个视图间返回补采集、比较 AI 提案差异并确认新修订；真实设备与模拟环境始终可辨，普通使用页面不暴露制作工具。
+
+## 十三、实施顺序约束
+
+设计批准后，实施计划依次覆盖协议与证据、确定性解释器测试、运行持久化与隔离、制作审阅、验证与版本启用、仿真器集成，以及演示设备端到端验证。审查并复用适合的原型代码。没有真实包和证据前，不声称支持真实 AucSeek。
+
+## 十四、待审阅的实施选择
+
+建议采用：显式选择并脱敏的请求字段采集、v2 协议与 v1 导入、结构化编辑器与高级 JSON、受限条件和操作集、每次运行独立 IndexedDB、明确租约与独立 origin、不可变启用版本，以及考生身份接入前的受限制作者试点。界面布局与详细接口名称留待实施计划在上述约束内确定。
