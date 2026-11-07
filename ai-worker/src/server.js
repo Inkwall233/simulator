@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { selectEvidence } from './capture-evidence.js'
+import { validateBehaviorV2 } from './behavior-contract.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -752,6 +753,7 @@ function validPreviewExpiry(value) {
 }
 
 function validatePreviewDraft(value) {
+  if (value?.schemaVersion === 'skilllab.simulator-behavior.v2') return validateBehaviorV2(value)
   if (!value || typeof value !== 'object'
       || value.schemaVersion !== 'skilllab.simulator-draft.v1'
       || !Array.isArray(value.apiMocks?.rules)
@@ -835,6 +837,10 @@ async function servePreviewRequest(preview, request, response) {
     await sendPreviewRuntimeSource(response, 'preview-mock-sw.js', 'text/javascript; charset=utf-8', true)
     return
   }
+  if (pathname === '/__skilllab/behavior-interpreter.js') {
+    await sendPreviewRuntimeSource(response, 'behavior-interpreter.js', 'text/javascript; charset=utf-8', false)
+    return
+  }
   if (pathname === '/__skilllab/config.json') {
     setPreviewSecurityHeaders(response)
     response.set('Cache-Control', 'no-store')
@@ -907,6 +913,10 @@ async function previewRuntimeSource(filename) {
 }
 
 function previewConfig(preview) {
+  if (preview.draft.schemaVersion === 'skilllab.simulator-behavior.v2') {
+    return { schemaVersion: preview.draft.schemaVersion, previewId: preview.id,
+      parentOrigin: previewParentOrigin, draft: preview.draft }
+  }
   return {
     schemaVersion: preview.draft.schemaVersion,
     previewId: preview.id,
