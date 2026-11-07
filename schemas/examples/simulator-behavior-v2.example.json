@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "skilllab.simulator-behavior.v2",
+  "packageVersion": { "id": "demo-package-v1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000" },
+  "scope": { "name": "配置读写", "criticalRuleIds": ["read-config", "save-config"] },
+  "initialState": { "config": { "enabled": false } },
+  "rules": [
+    {
+      "id": "read-config", "priority": 10,
+      "match": { "method": "GET", "path": "/api/config" },
+      "response": { "status": 200, "contentType": "application/json", "body": { "enabled": "{{state.config.enabled}}" } },
+      "operations": [],
+      "evidence": { "type": "CAPTURED", "observationIds": ["read-before", "read-after"], "note": "" }
+    },
+    {
+      "id": "save-config", "priority": 10,
+      "match": { "method": "PUT", "path": "/api/config" },
+      "when": { "op": "type", "left": { "source": "body", "path": "enabled" }, "value": "boolean" },
+      "response": { "status": 200, "contentType": "application/json", "body": { "ok": true, "enabled": "{{state.config.enabled}}" } },
+      "operations": [{ "operation": "SET_FROM_REQUEST", "path": "config.enabled", "requestPath": "enabled" }],
+      "evidence": { "type": "CAPTURED", "observationIds": ["save", "read-after"], "note": "" }
+    }
+  ],
+  "verificationCases": [{ "id": "config-save", "critical": true, "expectedState": { "config": { "enabled": true } } }]
+}

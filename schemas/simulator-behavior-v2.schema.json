@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://skilllab.invalid/schemas/simulator-behavior-v2.schema.json",
+  "title": "SkillLab simulator behavior v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "packageVersion", "scope", "initialState", "rules", "verificationCases"],
+  "properties": {
+    "schemaVersion": { "const": "skilllab.simulator-behavior.v2" },
+    "packageVersion": { "type": "object", "required": ["id", "sha256"], "properties": { "id": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" } },
+    "scope": { "type": "object", "required": ["name", "criticalRuleIds"], "properties": { "name": { "type": "string", "minLength": 1 }, "criticalRuleIds": { "type": "array", "items": { "type": "string" } } },
+    "initialState": { "type": "object" },
+    "rules": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/definitions/rule" } },
+    "verificationCases": { "type": "array", "items": { "type": "object" } }
+  },
+  "definitions": {
+    "rule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "priority", "match", "response", "operations", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }, "priority": { "type": "integer" },
+        "match": { "type": "object", "required": ["method", "path"], "properties": { "method": { "type": "string", "pattern": "^[A-Z]+$" }, "path": { "type": "string", "pattern": "^/" } } },
+        "when": { "type": "object" },
+        "response": { "type": "object", "required": ["status", "body"], "properties": { "status": { "type": "integer", "minimum": 200, "maximum": 599 }, "contentType": { "type": "string" }, "body": {} } },
+        "operations": { "type": "array", "items": { "type": "object" } },
+        "evidence": { "type": "object", "required": ["type", "observationIds"], "properties": { "type": { "enum": ["CAPTURED", "INFERRED_PENDING", "INFERRED_CONFIRMED"] }, "observationIds": { "type": "array", "items": { "type": "string" } }, "note": { "type": "string" } } }
+      }
+    }
+  }
+}
