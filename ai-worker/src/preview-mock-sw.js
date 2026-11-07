@@ -1,4 +1,5 @@
 import { evaluateBehavior } from './behavior-interpreter.js'
+import { withRunState } from './preview-runtime-store.js'
 
 let previewConfig = null
 let runtimeState = {}
@@ -34,7 +35,7 @@ async function loadConfig() {
     })
     .then(function (config) {
       previewConfig = config
-      runtimeState = cloneValue(config?.draft?.initialState || config?.draft?.stateModel?.initial || {})
+      runtimeState = cloneValue(config?.draft?.stateModel?.initial || {})
       return config
     })
     .catch(function (error) {
@@ -51,11 +52,12 @@ async function handleRequest(request, requestUrl) {
     if (config.schemaVersion === 'skilllab.simulator-behavior.v2') {
       const active = await fetch('/__skilllab/config.json', { cache: 'no-store' })
       if (!active.ok) return jsonResponse({ ok: false, error: 'Preview is no longer active' }, 410, null)
-      const result = evaluateBehavior(config.draft, {
+      const input = {
         method, path: requestUrl.pathname, query: Object.fromEntries(requestUrl.searchParams),
         body: await readRequestBody(request)
-      }, runtimeState)
-      runtimeState = result.nextState
+      }
+      const result = await withRunState(config.previewId, config.draft.initialState,
+        state => evaluateBehavior(config.draft, input, state))
       notifyClients(result.ruleId ? 'RULE_HIT' : 'UNMATCHED_REQUEST', {
         ruleId: result.ruleId, method, path: requestUrl.pathname, status: result.response.status
       })

@@ -841,6 +841,10 @@ async function servePreviewRequest(preview, request, response) {
     await sendPreviewRuntimeSource(response, 'behavior-interpreter.js', 'text/javascript; charset=utf-8', false)
     return
   }
+  if (pathname === '/__skilllab/preview-runtime-store.js') {
+    await sendPreviewRuntimeSource(response, 'preview-runtime-store.js', 'text/javascript; charset=utf-8', false)
+    return
+  }
   if (pathname === '/__skilllab/config.json') {
     setPreviewSecurityHeaders(response)
     response.set('Cache-Control', 'no-store')

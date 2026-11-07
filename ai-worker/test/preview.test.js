@@ -13,7 +13,7 @@ test('Mock runtime handles bodyless responses and rejects unsafe state paths', a
     Response, URL, fetch, console
   })
   const source = await readFile(new URL('../src/preview-mock-sw.js', import.meta.url), 'utf8')
-  vm.runInContext(source.replace(/^import .*\n/, ''), context)
+  vm.runInContext(source.replace(/^(?:import .*\n)+/, ''), context)
   for (const status of [204, 205, 304]) {
     const response = vm.runInContext(`responseForRule({id:'r',status:${status},match:{method:'GET'}}, {ok:true})`, context)
     assert.equal(response.status, status)
@@ -137,6 +137,7 @@ test('v2 preview executes conditional write and read-back in the browser', { tim
     browser = await chromium.launch({ headless: true })
     const page = await browser.newPage()
     await page.goto(`http://${id}.localhost:${port}/__skilllab/start`)
+    await page.waitForURL(`http://${id}.localhost:${port}/`)
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
     const results = await page.evaluate(async () => {
       const read = () => fetch('/api/config').then(response => response.json())
@@ -148,6 +149,9 @@ test('v2 preview executes conditional write and read-back in the browser', { tim
     assert.equal(results.initial.enabled, false)
     assert.equal(results.saved.enabled, true)
     assert.equal(results.after.enabled, true)
+    await page.reload()
+    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+    assert.equal(await page.evaluate(() => fetch('/api/config').then(response => response.json()).then(body => body.enabled)), true)
   } finally {
     await browser?.close()
     worker.kill()
