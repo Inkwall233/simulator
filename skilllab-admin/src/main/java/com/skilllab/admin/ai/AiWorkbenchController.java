@@ -28,15 +28,17 @@ public class AiWorkbenchController {
     private final AiApiDraftService drafts;
     private final AiSimulatorDraftService simulatorDrafts;
     private final AiPreviewService previews;
+    private final AiEvidenceService evidence;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
             AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
-            AiPreviewService previews) {
+            AiPreviewService previews, AiEvidenceService evidence) {
         this.service = service;
         this.worker = worker;
         this.drafts = drafts;
         this.simulatorDrafts = simulatorDrafts;
         this.previews = previews;
+        this.evidence = evidence;
     }
 
     @GetMapping("/device-projects")
@@ -143,6 +145,31 @@ public class AiWorkbenchController {
     @GetMapping("/sessions/{sessionId}/network")
     public Map<String, Object> network(@PathVariable String sessionId) {
         return service.workerJson(sessionId, "/network");
+    }
+
+    @PostMapping("/device-projects/{projectId}/sessions/{sessionId}/evidence-scope")
+    public Map<String, Object> selectEvidenceFields(@PathVariable String projectId,
+            @PathVariable String sessionId, @RequestBody Map<String, Object> scope) {
+        service.requireActiveSession(sessionId);
+        evidence.listEvidence(projectId, sessionId);
+        return worker.post("/internal/sessions/" + sessionId + "/evidence-scope", scope);
+    }
+
+    @PostMapping("/device-projects/{projectId}/sessions/{sessionId}/evidence")
+    public List<Map<String, Object>> saveEvidence(@PathVariable String projectId,
+            @PathVariable String sessionId, @RequestBody Map<String, Object> selection) {
+        return evidence.saveSelection(projectId, sessionId, selection);
+    }
+
+    @GetMapping("/device-projects/{projectId}/sessions/{sessionId}/evidence")
+    public List<Map<String, Object>> listEvidence(@PathVariable String projectId, @PathVariable String sessionId) {
+        return evidence.listEvidence(projectId, sessionId);
+    }
+
+    @GetMapping("/device-projects/{projectId}/sessions/{sessionId}/evidence/{evidenceId}")
+    public Map<String, Object> getEvidence(@PathVariable String projectId, @PathVariable String sessionId,
+            @PathVariable String evidenceId) {
+        return evidence.getEvidence(projectId, sessionId, evidenceId);
     }
 
     @PostMapping("/sessions/{sessionId}/drafts")

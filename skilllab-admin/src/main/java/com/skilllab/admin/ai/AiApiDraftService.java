@@ -126,6 +126,7 @@ public class AiApiDraftService {
             endpoint.put("path", path);
             endpoint.put("queryKeys", queryKeys(url.getQuery()));
             endpoint.put("observations", 0);
+            endpoint.put("observationIds", new ArrayList<String>());
             endpoint.put("responseStatusCodes", new LinkedHashSet<Integer>());
             endpoint.put("requestBodyObserved", false);
             endpoint.put("responseContentType", null);
@@ -134,6 +135,10 @@ public class AiApiDraftService {
             grouped.put(key, endpoint);
         }
         endpoint.put("observations", ((Integer) endpoint.get("observations")) + 1);
+        if (item.get("id") != null) {
+            @SuppressWarnings("unchecked") List<String> observationIds = (List<String>) endpoint.get("observationIds");
+            observationIds.add(item.get("id").toString());
+        }
         if (Boolean.TRUE.equals(item.get("hasBody"))) endpoint.put("requestBodyObserved", true);
         Object status = item.get("status");
         if (status instanceof Number) {
@@ -160,6 +165,7 @@ public class AiApiDraftService {
             rule.put("contentType", endpoint.get("responseContentType"));
             rule.put("body", endpoint.get("responseSample"));
             rule.put("requiresReview", true);
+            rule.put("observationIds", endpoint.get("observationIds"));
             rules.add(rule);
         }
         return rules;
