@@ -2,11 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   aiRequest,
-  clearAdminKey,
+  currentCreator,
+  loginCreator,
+  logoutCreator,
   getSimulatorDraft,
   fetchScreenshot,
-  getSavedAdminKey,
-  saveAdminKey,
   uploadPackage,
   type BrowserSession,
   type DeviceProject,
@@ -14,14 +14,16 @@ import {
   type PackageVersion,
   type PendingApproval,
   type SimulatorDraft,
+  type SimulatorPreview,
   createSimulatorDraft as createSimulatorDraftRequest
 } from '@/api/ai-workbench'
 
 const projects = ref<DeviceProject[]>([])
 const selectedProjectId = ref('')
 const selectedProject = computed(() => projects.value.find((item) => item.id === selectedProjectId.value) || null)
-const savedKey = ref(getSavedAdminKey())
-const keyDraft = ref(savedKey.value)
+const creator = ref('')
+const username = ref('')
+const password = ref('')
 const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
@@ -40,29 +42,103 @@ const apiDraft = ref<Record<string, unknown> | null>(null)
 const apiDraftId = ref('')
 const apiDraftEndpointCount = ref(0)
 const creatingDraft = ref(false)
+const behaviorJson = ref('')
+const editingApiDraftId = ref('')
+const simulatorGoal = ref('')
+const proposingBehavior = ref(false)
+const behaviorNotes = ref<string[]>([])
+
+async function proposeBehavior() {
+  if (!session.value || !simulatorGoal.value.trim()) return
+  proposingBehavior.value = true
+  const sourceId = apiDraftId.value
+  try {
+    const proposal = await aiRequest<{ apiDraftId: string; rules: unknown[]; stateModel: Record<string, unknown>; notes?: string[] }>(
+      '/sessions/' + session.value.id + '/simulator-behavior',
+      { method: 'POST', body: JSON.stringify({ goal: simulatorGoal.value }) }
+    )
+    if (sourceId !== apiDraftId.value || proposal.apiDraftId !== sourceId) throw new Error('采集版本已变化，请重新生成')
+    behaviorJson.value = JSON.stringify({ rules: proposal.rules, stateModel: proposal.stateModel }, null, 2)
+    editingApiDraftId.value = sourceId
+    behaviorNotes.value = Array.isArray(proposal.notes) ? proposal.notes : []
+  } catch (reason) { showError((reason as Error).message) }
+  finally { proposingBehavior.value = false }
+}
+
+function configureBehavior() {
+  const payload = apiDraft.value
+  if (!payload || !Array.isArray(payload.mockRules)) return
+  behaviorJson.value = JSON.stringify({
+    rules: payload.mockRules.map((rule: Record<string, unknown>) => ({
+      ...rule,
+      source: { apiDraftId: apiDraftId.value, endpointId: rule.id }
+    })),
+    stateModel: { initial: {}, transitions: [] }
+  }, null, 2)
+  editingApiDraftId.value = apiDraftId.value
+}
 const simulatorDraft = ref<SimulatorDraft | null>(null)
 const creatingSimulatorDraft = ref(false)
 const simulatorDrafts = ref<SimulatorDraft[]>([])
+const preview = ref<SimulatorPreview | null>(null)
+const previewFrame = ref<HTMLIFrameElement | null>(null)
+const openingPreview = ref(false)
+const previewEvents = ref<string[]>([])
+const previewEventNames = new Set(['SERVICE_WORKER_READY', 'SERVICE_WORKER_UNAVAILABLE', 'SERVICE_WORKER_ERROR', 'RULE_HIT', 'UNMATCHED_REQUEST', 'MOCK_RUNTIME_ERROR'])
+
+async function openPreview(draft: SimulatorDraft) {
+  const projectId = selectedProjectId.value
+  openingPreview.value = true
+  preview.value = null
+  previewEvents.value = []
+  try {
+    const result = await aiRequest<SimulatorPreview>('/device-projects/' + projectId + '/simulator-drafts/' + draft.id + '/preview', { method: 'POST' })
+    if (selectedProjectId.value === projectId && authorized.value) preview.value = result
+  } catch (reason) {
+    showError((reason as Error).message)
+  } finally {
+    openingPreview.value = false
+  }
+}
+
+function receivePreviewEvent(message: MessageEvent) {
+  const active = preview.value
+  if (!active || message.source !== previewFrame.value?.contentWindow
+      || message.origin !== new URL(active.previewUrl).origin) return
+  const data = message.data
+  if (!data || data.type !== 'SKILLLAB_PREVIEW_EVENT' || data.previewId !== active.previewId
+      || !previewEventNames.has(data.event)) return
+  const detail = data.detail && typeof data.detail === 'object' ? data.detail : {}
+  previewEvents.value.unshift(new Date().toLocaleTimeString('zh-CN') + ' ' + data.event + ' ' + JSON.stringify(detail).slice(0, 500))
+  previewEvents.value.length = Math.min(previewEvents.value.length, 100)
+}
 const command = ref('')
 const typedText = ref('')
 const timeline = ref<Array<{ id: number; time: string; text: string; type: string }>>([])
 let pollTimer: number | undefined
 let nextTimelineId = 1
 
-const authorized = computed(() => Boolean(savedKey.value))
+const authorized = computed(() => Boolean(creator.value))
 const httpWarning = computed(() => targetUrl.value.trim().toLowerCase().startsWith('http://'))
 
 onMounted(async () => {
-  if (authorized.value) await loadProjects()
+  window.addEventListener('message', receivePreviewEvent)
+  try {
+    creator.value = (await currentCreator()).userId
+    await loadProjects()
+  } catch { creator.value = '' }
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('message', receivePreviewEvent)
   stopPolling()
   clearScreenshot()
   if (session.value) void closeSession(false)
 })
 
 watch(selectedProjectId, async (id) => {
+  preview.value = null
+  previewEvents.value = []
   latestPackage.value = null
   simulatorDraft.value = null
   simulatorDrafts.value = []
@@ -83,11 +159,14 @@ watch(selectedProjectId, async (id) => {
 })
 
 async function connectWithKey() {
-  const key = keyDraft.value.trim()
-  if (!key) return
-  saveAdminKey(key)
-  savedKey.value = key
-  await loadProjects()
+  if (!username.value.trim() || !password.value) return
+  loading.value = true
+  try {
+    creator.value = (await loginCreator(username.value.trim(), password.value)).userId
+    password.value = ''
+    await loadProjects()
+  } catch (reason) { showError((reason as Error).message) }
+  finally { loading.value = false }
 }
 
 async function loadProjects() {
@@ -99,8 +178,7 @@ async function loadProjects() {
     }
     error.value = ''
   } catch (reason) {
-    savedKey.value = ''
-    keyDraft.value = ''
+    creator.value = ''
     error.value = (reason as Error).message
   } finally {
     loading.value = false
@@ -306,6 +384,7 @@ async function createApiDraft() {
     apiDraftId.value = result.id
     apiDraft.value = result.payload
     apiDraftEndpointCount.value = result.endpointCount
+    configureBehavior()
     simulatorDraft.value = null
     addEvent('已生成 ' + result.endpointCount + ' 条接口 Mock 草稿，待人工审查', 'success')
   } catch (reason) {
@@ -322,7 +401,8 @@ async function createSimulatorDraft() {
     simulatorDraft.value = await createSimulatorDraftRequest(
       selectedProjectId.value,
       latestPackage.value.id,
-      apiDraftId.value
+      apiDraftId.value,
+      behaviorJson.value && editingApiDraftId.value === apiDraftId.value ? JSON.parse(behaviorJson.value) : undefined
     )
     simulatorDrafts.value = [
       simulatorDraft.value,
@@ -397,10 +477,10 @@ async function closeSession(showNotice = true) {
 }
 
 async function forgetKey() {
+  preview.value = null
   await closeSession(false)
-  clearAdminKey()
-  savedKey.value = ''
-  keyDraft.value = ''
+  try { await logoutCreator() } catch { /* Expired sessions are already logged out. */ }
+  creator.value = ''
   projects.value = []
   selectedProjectId.value = ''
 }
@@ -442,16 +522,16 @@ function sizeLabel(size: number) {
         <h1>AI 设备制作工作台</h1>
         <p class="wb-subtitle">上传静态包，连接获准设备，在线采集页面操作与接口。</p>
       </div>
-      <button v-if="authorized" class="wb-quiet" @click="forgetKey">锁定工作台</button>
+      <button v-if="authorized" class="wb-quiet" @click="forgetKey">退出登录</button>
     </header>
 
     <div v-if="!authorized" class="wb-key-gate">
       <div class="wb-key-mark">⌑</div>
-      <h2>连接 AI 工作台</h2>
-      <p>输入部署时配置的工作台访问密钥。密钥只保存在当前标签页会话中。</p>
+      <h2>制作者登录</h2>
       <form class="wb-key-form" @submit.prevent="connectWithKey">
-        <input v-model="keyDraft" type="password" autocomplete="current-password" placeholder="工作台访问密钥" />
-        <button class="wb-primary" :disabled="!keyDraft.trim() || loading">连接</button>
+        <input v-model="username" autocomplete="username" placeholder="用户名" />
+        <input v-model="password" type="password" autocomplete="current-password" placeholder="密码" />
+        <button class="wb-primary" :disabled="!username.trim() || !password || loading">登录</button>
       </form>
       <p v-if="error" class="wb-error">{{ error }}</p>
     </div>
@@ -501,6 +581,7 @@ function sizeLabel(size: number) {
                 <div v-for="draft in simulatorDrafts" :key="draft.id" class="wb-saved-draft-row">
                   <span>v{{ draft.versionNumber }} · {{ draft.status }} · {{ draft.createdAt }}</span>
                   <button class="wb-link-button" @click="downloadSavedSimulatorDraft(draft)">下载</button>
+                  <button class="wb-link-button" :disabled="openingPreview" @click="openPreview(draft)">隔离预览</button>
                 </div>
               </div>
             </div>
@@ -526,6 +607,16 @@ function sizeLabel(size: number) {
         </aside>
 
         <main class="wb-right">
+          <section v-if="preview" class="wb-preview">
+            <div class="wb-device-toolbar">
+              <strong>隔离预览 · v{{ preview.versionNumber }}</strong>
+              <span>{{ preview.runtimeVersion }} · {{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }} 到期</span>
+              <button class="wb-secondary" @click="preview = null">关闭</button>
+            </div>
+            <iframe ref="previewFrame" :src="preview.previewUrl" title="Simulator 草稿预览"
+              sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer" />
+            <ol class="wb-preview-events"><li v-for="(item, index) in previewEvents" :key="index">{{ item }}</li></ol>
+          </section>
           <section class="wb-card wb-device-card">
             <div class="wb-device-toolbar">
               <div><span class="wb-kicker">03 / LIVE DEVICE</span><strong>真实设备页面</strong></div>
@@ -585,10 +676,18 @@ function sizeLabel(size: number) {
               <pre>{{ JSON.stringify(apiDraft, null, 2) }}</pre>
               <p>规则来自观察到的请求样例，不是最终可发布的设备配置；请审查后再接入 Simulator。</p>
             </details>
+            <div v-if="apiDraft && editingApiDraftId === apiDraftId" class="wb-behavior-editor">
+              <label class="wb-label" for="simulator-goal">模拟能力范围</label>
+              <textarea id="simulator-goal" v-model="simulatorGoal" rows="2" placeholder="例如：设备参数读取、修改与保存；不包含录像播放" />
+              <button class="wb-secondary" :disabled="proposingBehavior || !simulatorGoal.trim()" @click="proposeBehavior">{{ proposingBehavior ? '生成中…' : 'AI 制作行为草案' }}</button>
+              <ul v-if="behaviorNotes.length"><li v-for="(note, index) in behaviorNotes" :key="index">{{ note }}</li></ul>
+              <label class="wb-label" for="simulator-behavior">接口与状态规则 · 待确认</label>
+              <textarea id="simulator-behavior" v-model="behaviorJson" rows="16" spellcheck="false" />
+            </div>
             <details v-if="simulatorDraft?.payload" class="wb-draft-preview">
               <summary>Simulator 草稿 v{{ simulatorDraft.versionNumber }} · {{ simulatorDraft.status }} · 待审核</summary>
               <pre>{{ JSON.stringify(simulatorDraft.payload, null, 2) }}</pre>
-              <p>草稿已固定关联当前静态包和接口采集版本；此版本尚未部署到 Simulator。</p>
+              <p>草稿已固定关联静态包和接口采集版本，尚未发布。</p>
             </details>
             <div v-if="approvals.length" class="wb-approvals">
               <div v-for="item in approvals" :key="item.id" class="wb-approval">
@@ -670,6 +769,17 @@ function sizeLabel(size: number) {
 .wb-composer textarea{resize:vertical;min-height:56px}.wb-composer button{align-self:start;white-space:nowrap}
 .wb-composer small{grid-column:1/-1;color:#98a2af;font-size:9px}
 .wb-device-card{min-height:525px}
+.wb-behavior-editor{display:grid;gap:8px;margin:12px 0;font-size:12px}
+.wb-behavior-editor textarea{width:100%;box-sizing:border-box;resize:vertical;min-width:0;font:12px/1.5 ui-monospace,monospace}
+.wb-behavior-editor button{justify-self:start}
+.wb-saved-drafts{display:grid;gap:7px;margin-top:12px}
+.wb-saved-draft-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}
+.wb-saved-draft-row>span{flex:1 1 160px;overflow-wrap:anywhere}
+.wb-link-button{border:0;background:transparent;padding:4px;color:#315ec6;cursor:pointer;font-size:11px}
+.wb-preview{min-width:0;border-top:2px solid #32835a;background:#fff}
+.wb-preview .wb-device-toolbar{flex-wrap:wrap;font-size:11px}
+.wb-preview iframe{display:block;width:100%;height:600px;border:0}
+.wb-preview-events{max-height:160px;overflow:auto;padding:8px 24px;font:11px/1.6 ui-monospace,monospace;overflow-wrap:anywhere}
 .wb-device-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #edf0f4}
 .wb-device-toolbar>div strong{color:#344257;font-size:12px}
 .wb-target-form{display:flex;flex:1;max-width:660px;align-items:center;gap:6px}

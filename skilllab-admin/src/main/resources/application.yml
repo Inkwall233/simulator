@@ -1,5 +1,12 @@
 server:
   port: 8080
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        http-only: true
+        secure: ${SKILLLAB_SESSION_COOKIE_SECURE:false}
+        same-site: strict
 
 spring:
   application:
@@ -24,10 +31,13 @@ spring:
 skilllab:
   ai:
     enabled: ${SKILLLAB_AI_ENABLED:true}
-    admin-key: ${SKILLLAB_AI_ADMIN_KEY:}
+    creator-username: ${SKILLLAB_CREATOR_USERNAME:}
+    creator-password-hash: ${SKILLLAB_CREATOR_PASSWORD_HASH:}
+    admin-origin: ${SKILLLAB_ADMIN_ORIGIN:http://localhost:5174}
     worker-url: ${AI_WORKER_URL:http://ai-worker:3001}
     worker-secret: ${AI_WORKER_SHARED_SECRET:}
     data-dir: ${AI_DATA_DIR:./data/ai-packages}
+    preview-ttl-seconds: ${AI_PREVIEW_TTL_SECONDS:900}
     allowed-target-origins: ${AI_ALLOWED_TARGET_ORIGINS:}
 
 logging:

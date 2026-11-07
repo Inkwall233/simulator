@@ -1,5 +1,5 @@
 # AI workbench override. Keep deploy/docker-compose.yml as the base stack.
-# Required environment: SKILLLAB_AI_ADMIN_KEY, AI_WORKER_SHARED_SECRET,
+# Required environment: SKILLLAB_CREATOR_USERNAME, SKILLLAB_CREATOR_PASSWORD_HASH, AI_WORKER_SHARED_SECRET,
 # AI_ALLOWED_TARGET_ORIGINS. Optional: AI_MODEL, AI_OPENAI_API_KEY,
 # AI_OPENAI_CHAT_COMPLETIONS_URL.
 
@@ -7,7 +7,10 @@ services:
   backend:
     environment:
       SKILLLAB_AI_ENABLED: "true"
-      SKILLLAB_AI_ADMIN_KEY: ${SKILLLAB_AI_ADMIN_KEY:?Set SKILLLAB_AI_ADMIN_KEY}
+      SKILLLAB_CREATOR_USERNAME: ${SKILLLAB_CREATOR_USERNAME:?Set SKILLLAB_CREATOR_USERNAME}
+      SKILLLAB_CREATOR_PASSWORD_HASH: ${SKILLLAB_CREATOR_PASSWORD_HASH:?Set SKILLLAB_CREATOR_PASSWORD_HASH}
+      SKILLLAB_ADMIN_ORIGIN: ${SKILLLAB_ADMIN_ORIGIN:-https://skilllab-admin.xyz}
+      SKILLLAB_SESSION_COOKIE_SECURE: "true"
       SKILLLAB_DB_URL: "jdbc:h2:file:/data/ai-metadata"
       AI_DATA_DIR: /data/ai-packages
       AI_WORKER_URL: http://ai-worker:3001
@@ -22,12 +25,19 @@ services:
   ai-worker:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.ai-worker
+      dockerfile: ai-worker/Dockerfile
     restart: unless-stopped
     expose:
       - "3001"
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ai-workbench-data:/data:ro
     environment:
       PORT: "3001"
+      AI_PREVIEW_ROOT: /data/ai-previews
+      AI_PREVIEW_PARENT_ORIGIN: ${AI_PREVIEW_PARENT_ORIGIN:-http://localhost:5174}
+      AI_PREVIEW_URL_TEMPLATE: ${AI_PREVIEW_URL_TEMPLATE:-http://{previewId}.localhost:3001}
       AI_ALLOWED_WEBSOCKET_ORIGINS: ${AI_ALLOWED_WEBSOCKET_ORIGINS:-}
       AI_SESSION_IDLE_TIMEOUT_MS: ${AI_SESSION_IDLE_TIMEOUT_MS:-1800000}
       AI_WORKER_SHARED_SECRET: ${AI_WORKER_SHARED_SECRET:?Set AI_WORKER_SHARED_SECRET}

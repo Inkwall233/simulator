@@ -1,9 +1,6 @@
 package com.skilllab.admin.ai;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.Collections;
 
 import javax.servlet.FilterChain;
 import javax.servlet.ServletException;
@@ -21,13 +18,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AiAdminKeyFilter extends OncePerRequestFilter {
 
     private final boolean enabled;
-    private final String adminKey;
-
-    public AiAdminKeyFilter(
-            @Value("${skilllab.ai.enabled:true}") boolean enabled,
-            @Value("${skilllab.ai.admin-key:}") String adminKey) {
+    public AiAdminKeyFilter(@Value("${skilllab.ai.enabled:true}") boolean enabled) {
         this.enabled = enabled;
-        this.adminKey = adminKey;
     }
 
     @Override
@@ -42,19 +34,6 @@ public class AiAdminKeyFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         if (!enabled) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-        if (adminKey == null || adminKey.trim().isEmpty()) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                    "AI workbench is disabled until SKILLLAB_AI_ADMIN_KEY is configured");
-            return;
-        }
-        String suppliedKey = request.getHeader("X-SkillLab-AI-Key");
-        if (suppliedKey == null || !MessageDigest.isEqual(
-                adminKey.getBytes(StandardCharsets.UTF_8),
-                suppliedKey.getBytes(StandardCharsets.UTF_8))) {
-            response.setHeader("WWW-Authenticate", "SkillLab-AI-Key");
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "AI workbench key required");
             return;
         }
         filterChain.doFilter(request, response);

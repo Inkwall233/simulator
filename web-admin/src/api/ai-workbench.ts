@@ -1,5 +1,3 @@
-const adminKeyStorageKey = 'skilllab.ai.adminKey'
-
 export interface DeviceProject {
   id: string
   name: string
@@ -63,28 +61,41 @@ export interface SimulatorDraft {
   payload?: Record<string, unknown>
 }
 
-export function getSavedAdminKey(): string {
-  return sessionStorage.getItem(adminKeyStorageKey) || ''
+export interface SimulatorPreview {
+  previewId: string
+  projectId: string
+  draftId: string
+  versionNumber: number
+  previewUrl: string
+  expiresAt: string
+  runtimeVersion: string
 }
 
-export function saveAdminKey(value: string): void {
-  sessionStorage.setItem(adminKeyStorageKey, value)
+export async function loginCreator(username: string, password: string): Promise<{ userId: string }> {
+  const response = await fetch('/api/ai/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  if (!response.ok) throw new Error('账号或密码错误')
+  return response.json()
 }
 
-export function clearAdminKey(): void {
-  sessionStorage.removeItem(adminKeyStorageKey)
+export async function currentCreator(): Promise<{ userId: string }> {
+  return aiRequest('/auth/me')
+}
+
+export async function logoutCreator(): Promise<void> {
+  await aiRequest('/auth/logout', { method: 'POST' })
 }
 
 export async function aiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  headers.set('X-SkillLab-AI-Key', getSavedAdminKey())
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   const response = await fetch('/api/ai' + path, { ...init, headers })
   if (!response.ok) {
     const result = await response.json().catch(() => ({})) as { error?: string; message?: string }
-    if (response.status === 401) clearAdminKey()
     throw new Error(result.error || result.message || 'Request failed (' + response.status + ')')
   }
   if (response.status === 204) return undefined as T
@@ -103,11 +114,12 @@ export async function uploadPackage(projectId: string, file: File): Promise<Pack
 export async function createSimulatorDraft(
   projectId: string,
   packageId: string,
-  apiDraftId: string
+  apiDraftId: string,
+  behavior: { rules: unknown[]; stateModel: Record<string, unknown> } | undefined = undefined
 ): Promise<SimulatorDraft> {
   return aiRequest<SimulatorDraft>('/device-projects/' + projectId + '/simulator-drafts', {
     method: 'POST',
-    body: JSON.stringify({ packageId, apiDraftId })
+    body: JSON.stringify({ packageId, apiDraftId, ...behavior })
   })
 }
 
@@ -122,7 +134,7 @@ export async function getSimulatorDraft(
 
 export async function fetchScreenshot(sessionId: string): Promise<Blob> {
   const response = await fetch('/api/ai/sessions/' + sessionId + '/screenshot', {
-    headers: { 'X-SkillLab-AI-Key': getSavedAdminKey() },
+    headers: {},
     cache: 'no-store'
   })
   if (!response.ok) throw new Error('Screenshot unavailable (' + response.status + ')')
