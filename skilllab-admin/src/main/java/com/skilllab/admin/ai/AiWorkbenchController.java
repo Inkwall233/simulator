@@ -30,13 +30,14 @@ public class AiWorkbenchController {
     private final AiSimulatorDraftService simulatorDrafts;
     private final AiPreviewService previews;
     private final AiEvidenceService evidence;
+    private final AiBaselineService baselines;
     private final AiRunService runs;
     private final AiValidationService validations;
     private final AiCreatorAuth creatorAuth;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
             AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
-            AiPreviewService previews, AiEvidenceService evidence, AiRunService runs,
+            AiPreviewService previews, AiEvidenceService evidence, AiBaselineService baselines, AiRunService runs,
             AiValidationService validations, AiCreatorAuth creatorAuth) {
         this.service = service;
         this.worker = worker;
@@ -44,6 +45,7 @@ public class AiWorkbenchController {
         this.simulatorDrafts = simulatorDrafts;
         this.previews = previews;
         this.evidence = evidence;
+        this.baselines = baselines;
         this.runs = runs;
         this.validations = validations;
         this.creatorAuth = creatorAuth;
@@ -62,6 +64,26 @@ public class AiWorkbenchController {
     @GetMapping("/device-projects/{projectId}")
     public Map<String, Object> getProject(@PathVariable String projectId) {
         return service.getProject(projectId);
+    }
+
+    @PostMapping("/device-projects/{projectId}/baselines")
+    public Map<String, Object> createBaseline(@PathVariable String projectId,
+            @RequestBody Map<String, Object> request, HttpServletRequest servletRequest) {
+        @SuppressWarnings("unchecked") Map<String, Object> scenario = (Map<String, Object>) request.get("scenario");
+        return baselines.createBaseline(projectId, String.valueOf(request.get("packageId")),
+                String.valueOf(request.get("apiDraftId")), String.valueOf(request.get("sessionId")),
+                scenario, creatorAuth.requireUser(servletRequest));
+    }
+
+    @GetMapping("/device-projects/{projectId}/baselines")
+    public List<Map<String, Object>> listBaselines(@PathVariable String projectId, HttpServletRequest servletRequest) {
+        return baselines.listBaselines(projectId, creatorAuth.requireUser(servletRequest));
+    }
+
+    @GetMapping("/device-projects/{projectId}/baselines/{baselineId}")
+    public Map<String, Object> getBaseline(@PathVariable String projectId, @PathVariable String baselineId,
+            HttpServletRequest servletRequest) {
+        return baselines.getBaseline(projectId, baselineId, creatorAuth.requireUser(servletRequest));
     }
 
     @PostMapping("/device-projects/{projectId}/simulator-drafts")

@@ -14,8 +14,13 @@ import {
   getValidationReport,
   enableCandidate,
   fetchScreenshot,
+  listCaptureEvidence,
+  listBaselines,
+  createBaseline,
   uploadPackage,
   type BrowserSession,
+  type CaptureEvidence,
+  type DeviceBaseline,
   type DeviceProject,
   type NetworkEntry,
   type PackageVersion,
@@ -46,6 +51,13 @@ const latestPackage = ref<PackageVersion | null>(null)
 const session = ref<BrowserSession | null>(null)
 const screenshotUrl = ref('')
 const network = ref<NetworkEntry[]>([])
+const capturedEvidence = ref<CaptureEvidence[]>([])
+const baselines = ref<DeviceBaseline[]>([])
+const baselineSelection = ref<string[]>([])
+const baselineAction = ref('')
+const baselineCheckpointKind = ref('TEXT_CONTAINS')
+const baselineCheckpointValue = ref('')
+const baselineBusy = ref(false)
 const approvals = ref<PendingApproval[]>([])
 const apiDraft = ref<Record<string, unknown> | null>(null)
 const apiDraftId = ref('')
@@ -398,21 +410,26 @@ watch(selectedProjectId, async (id) => {
   preview.value = null
   previewEvents.value = []
   network.value = []
+  capturedEvidence.value = []
+  baselines.value = []
+  baselineSelection.value = []
   approvals.value = []
   latestPackage.value = null
   simulatorDraft.value = null
   simulatorDrafts.value = []
   if (!id) return
   try {
-    const [detail, savedDrafts] = await Promise.all([
+    const [detail, savedDrafts, savedBaselines] = await Promise.all([
       aiRequest<DeviceProject>('/device-projects/' + id),
-      aiRequest<SimulatorDraft[]>('/device-projects/' + id + '/simulator-drafts')
+      aiRequest<SimulatorDraft[]>('/device-projects/' + id + '/simulator-drafts'),
+      listBaselines(id)
     ])
     if (selectedProjectId.value !== id) return
     const index = projects.value.findIndex((item) => item.id === id)
     if (index >= 0) projects.value[index] = detail
     latestPackage.value = detail.packages?.[0] || null
     simulatorDrafts.value = savedDrafts
+    baselines.value = savedBaselines
   } catch (reason) {
     showError((reason as Error).message)
   }
@@ -659,6 +676,45 @@ async function createApiDraft() {
   } finally {
     creatingDraft.value = false
   }
+}
+
+async function saveObservations() {
+  const active = session.value
+  const projectId = selectedProjectId.value
+  if (!active || !network.value.length) return
+  baselineBusy.value = true
+  try {
+    await aiRequest(`/device-projects/${projectId}/sessions/${active.id}/evidence`, {
+      method: 'POST', body: JSON.stringify({ observationIds: network.value.map(item => item.id) })
+    })
+    if (active.id !== session.value?.id || projectId !== selectedProjectId.value) return
+    capturedEvidence.value = await listCaptureEvidence(projectId, active.id)
+    addEvent(`已保存 ${capturedEvidence.value.length} 条脱敏观察`, 'success')
+  } catch (reason) { showError((reason as Error).message) }
+  finally { baselineBusy.value = false }
+}
+
+async function freezeBaseline() {
+  const active = session.value
+  const projectId = selectedProjectId.value
+  const archive = latestPackage.value
+  const sourceId = apiDraftId.value
+  if (!active || !archive || !sourceId || !baselineSelection.value.length) return
+  baselineBusy.value = true
+  try {
+    const chosen = capturedEvidence.value.filter(item => baselineSelection.value.includes(item.id))
+    const steps = chosen.sort((a, b) => a.sequence - b.sequence).map(item => ({
+      observationId: item.id, action: baselineAction.value.trim(),
+      checkpoint: baselineCheckpointValue.value.trim() ? { kind: baselineCheckpointKind.value, value: baselineCheckpointValue.value.trim() } : null,
+      comparisons: []
+    }))
+    const saved = await createBaseline(projectId, archive.id, sourceId, active.id, { steps })
+    if (active.id !== session.value?.id || projectId !== selectedProjectId.value || archive.id !== latestPackage.value?.id) return
+    baselines.value.unshift(saved)
+    baselineSelection.value = []
+    addEvent('已冻结设备基线', 'success')
+  } catch (reason) { showError((reason as Error).message) }
+  finally { baselineBusy.value = false }
 }
 
 async function createSimulatorDraft() {
@@ -983,6 +1039,21 @@ function sizeLabel(size: number) {
                 </div>
               </div>
             </div>
+            <div v-if="activeView === 'capture' && session" class="wb-baseline">
+              <div class="wb-section-title"><div><span>BASELINE</span><h2>设备观察基线</h2></div>
+                <button class="wb-secondary" :disabled="baselineBusy || !network.length" @click="saveObservations">保存脱敏观察</button></div>
+              <template v-if="capturedEvidence.length">
+                <label v-for="item in capturedEvidence" :key="item.id" class="wb-baseline-item">
+                  <input v-model="baselineSelection" type="checkbox" :value="item.id" :disabled="item.truncated || item.redacted || (!item.bodyUsable && !['GET', 'HEAD'].includes(item.method))" />
+                  {{ item.sequence }} · {{ item.method }} {{ item.path }} · {{ item.status }}
+                </label>
+                <input v-model="baselineAction" class="wb-input" maxlength="200" placeholder="操作意图，例如：保存配置" />
+                <div class="wb-two-fields"><select v-model="baselineCheckpointKind" class="wb-input"><option value="TEXT_CONTAINS">页面文字</option><option value="URL_EQUALS">页面地址</option><option value="ELEMENT_VISIBLE">元素可见</option></select>
+                  <input v-model="baselineCheckpointValue" class="wb-input" placeholder="确认的页面结果（可留空）" /></div>
+                <button class="wb-secondary" :disabled="baselineBusy || !apiDraftId || !latestPackage || !baselineAction.trim() || !baselineSelection.length" @click="freezeBaseline">冻结所选基线</button>
+              </template>
+              <p v-if="baselines.length">已冻结 {{ baselines.length }} 份基线</p>
+            </div>
             <div v-if="activeView === 'capture'" class="wb-table-scroll">
               <table class="wb-table">
                 <thead><tr><th>方法</th><th>请求地址</th><th>状态</th><th>类型</th><th>时间</th></tr></thead>
@@ -1193,6 +1264,7 @@ function sizeLabel(size: number) {
 .wb-method{display:inline-block;min-width:39px;padding:3px 4px;border-radius:4px;background:#eef2f7;color:#65748a;font:700 8px ui-monospace,monospace;text-align:center}
 .wb-method.get,.wb-method.head{background:#e8f5ee;color:#31815a}.wb-method.post,.wb-method.put,.wb-method.patch,.wb-method.delete{background:#fff2df;color:#9a6729}
 .wb-status{color:#31815a;font:9px ui-monospace,monospace}.wb-status.failed{color:#c34b4b}.wb-type-cell,.wb-time-cell{white-space:nowrap}
+.wb-baseline{display:grid;gap:10px;padding:14px 0;border-top:1px solid #dce3e6}.wb-baseline-item{display:flex;align-items:center;gap:8px;font-size:12px;overflow-wrap:anywhere}
 .wb-table-empty{height:75px;color:#98a3b1!important;text-align:center}.wb-footnote{margin:9px 0 0;color:#99a3af;font-size:8px}
 .wb-key-gate{max-width:440px;margin:8vh auto;padding:26px;border:1px solid #e2e7ee;border-radius:13px;background:white;text-align:center}
 .wb-key-mark{width:40px;height:40px;margin:0 auto 11px;font-size:23px}.wb-key-gate h2{margin:0;font-size:16px}.wb-key-gate p{color:#77869a;font-size:10px;line-height:1.6}

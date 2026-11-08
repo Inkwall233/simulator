@@ -43,6 +43,43 @@ export interface NetworkEntry {
   failure?: string | null
 }
 
+export interface CaptureEvidence {
+  id: string
+  sequence: number
+  method: string
+  path: string
+  status: number
+  bodyUsable: boolean
+  truncated: boolean
+  redacted: boolean
+}
+
+export interface DeviceBaseline {
+  id: string
+  projectId: string
+  packageId: string
+  packageSha256: string
+  apiDraftId: string
+  sessionId: string
+  snapshotSha256: string
+  scenario: { steps: Array<Record<string, unknown>> }
+}
+
+export function listCaptureEvidence(projectId: string, sessionId: string): Promise<CaptureEvidence[]> {
+  return aiRequest(`/device-projects/${projectId}/sessions/${sessionId}/evidence`)
+}
+
+export function listBaselines(projectId: string): Promise<DeviceBaseline[]> {
+  return aiRequest(`/device-projects/${projectId}/baselines`)
+}
+
+export function createBaseline(projectId: string, packageId: string, apiDraftId: string, sessionId: string,
+  scenario: { steps: Array<Record<string, unknown>> }): Promise<DeviceBaseline> {
+  return aiRequest(`/device-projects/${projectId}/baselines`, {
+    method: 'POST', body: JSON.stringify({ packageId, apiDraftId, sessionId, scenario })
+  })
+}
+
 export interface PendingApproval {
   id: string
   method: string
