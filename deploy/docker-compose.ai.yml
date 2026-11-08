@@ -32,12 +32,15 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
-      - ai-workbench-data:/data:ro
+      - ai-workbench-data:/data
     environment:
       PORT: "3001"
       AI_PREVIEW_ROOT: /data/ai-previews
       AI_PREVIEW_PARENT_ORIGIN: ${AI_PREVIEW_PARENT_ORIGIN:-http://localhost:5174}
       AI_PREVIEW_URL_TEMPLATE: ${AI_PREVIEW_URL_TEMPLATE:-http://{previewId}.localhost:3001}
+      AI_RUN_REGISTRY_ROOT: /data/ai-runs
+      AI_RUN_PACKAGE_ROOT: /data/ai-runs
+      AI_RUN_ORIGIN_TEMPLATE: ${AI_RUN_ORIGIN_TEMPLATE:-http://{runId}.localhost:3001}
       AI_ALLOWED_WEBSOCKET_ORIGINS: ${AI_ALLOWED_WEBSOCKET_ORIGINS:-}
       AI_SESSION_IDLE_TIMEOUT_MS: ${AI_SESSION_IDLE_TIMEOUT_MS:-1800000}
       AI_WORKER_SHARED_SECRET: ${AI_WORKER_SHARED_SECRET:?Set AI_WORKER_SHARED_SECRET}

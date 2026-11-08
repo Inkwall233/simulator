@@ -159,3 +159,45 @@ test('v2 preview executes conditional write and read-back in the browser', { tim
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('authorized run origins isolate service workers and state and reject forged hosts', { timeout: 60000 }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skilllab-runs-browser-'))
+  const port = 38000 + Math.floor(Math.random() * 10000)
+  const worker = spawn(process.execPath, ['src/server.js'], { cwd: new URL('..', import.meta.url), windowsHide: true,
+    env: { ...process.env, PORT: String(port), AI_WORKER_SHARED_SECRET: 'run-test-secret', AI_RUN_REGISTRY_ROOT: root, AI_RUN_PACKAGE_ROOT: root } })
+  const base = `http://127.0.0.1:${port}`
+  const post = (route, body) => fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SkillLab-Worker-Key': 'run-test-secret' }, body: JSON.stringify(body) })
+  let browser
+  try {
+    let ready = false
+    for (let i = 0; i < 100; i++) { if (await fetch(base + '/health').then(r => r.ok).catch(() => false)) { ready = true; break }; await new Promise(resolve => setTimeout(resolve, 100)) }
+    assert.ok(ready)
+    const a = 'c'.repeat(32), b = 'd'.repeat(32)
+    const behavior = JSON.parse(await readFile(new URL('../../schemas/examples/simulator-behavior-v2.example.json', import.meta.url)))
+    await Promise.all([a, b].map(async id => {
+      const dir = path.join(root, id); await mkdir(dir); await writeFile(path.join(dir, 'index.html'), '<!doctype html><html><head></head><body>run</body></html>')
+      const response = await post('/internal/runs', { runId: id, host: `${id}.localhost:${port}`, projectId: 'p', ownerId: 'maker',
+        expiresAt: Date.now() + 60000, maxExpiresAt: Date.now() + 120000, sourceDirectory: dir, draft: behavior })
+      assert.equal(response.status, 201, await response.text())
+    }))
+    assert.equal((await fetch(base + '/', { headers: { Host: `e${'e'.repeat(31)}.localhost:${port}` } })).status, 404)
+    browser = await chromium.launch({ headless: true })
+    const context = await browser.newContext()
+    const one = await context.newPage(), two = await context.newPage()
+    await Promise.all([one.goto(`http://${a}.localhost:${port}/__skilllab/start`), two.goto(`http://${b}.localhost:${port}/__skilllab/start`)])
+    await Promise.all([one.waitForURL(`http://${a}.localhost:${port}/`), two.waitForURL(`http://${b}.localhost:${port}/`)])
+    await Promise.all([one.waitForFunction(() => Boolean(navigator.serviceWorker.controller)), two.waitForFunction(() => Boolean(navigator.serviceWorker.controller))])
+    const saveStatus = await one.evaluate(async () => fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) }).then(r => r.status))
+    assert.equal(saveStatus, 200)
+    const states = await Promise.all([one, two].map(page => page.evaluate(() => fetch('/api/config').then(r => r.json()).then(v => v.enabled))))
+    assert.deepEqual(states, [true, false])
+    await post(`/internal/runs/${a}/end`, { runId: a })
+    const responseAfterEnd = await fetch(`http://${a}.localhost:${port}/__skilllab/config.json`).then(response => response.status)
+    assert.equal(responseAfterEnd, 404)
+    await context.close()
+  } finally {
+    await browser?.close(); worker.kill()
+    await new Promise(resolve => worker.exitCode !== null ? resolve() : worker.once('exit', resolve))
+    await rm(root, { recursive: true, force: true })
+  }
+})

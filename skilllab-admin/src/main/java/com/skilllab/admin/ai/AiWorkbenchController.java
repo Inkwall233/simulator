@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import javax.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/ai")
@@ -29,16 +30,20 @@ public class AiWorkbenchController {
     private final AiSimulatorDraftService simulatorDrafts;
     private final AiPreviewService previews;
     private final AiEvidenceService evidence;
+    private final AiRunService runs;
+    private final AiCreatorAuth creatorAuth;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
             AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
-            AiPreviewService previews, AiEvidenceService evidence) {
+            AiPreviewService previews, AiEvidenceService evidence, AiRunService runs, AiCreatorAuth creatorAuth) {
         this.service = service;
         this.worker = worker;
         this.drafts = drafts;
         this.simulatorDrafts = simulatorDrafts;
         this.previews = previews;
         this.evidence = evidence;
+        this.runs = runs;
+        this.creatorAuth = creatorAuth;
     }
 
     @GetMapping("/device-projects")
@@ -118,6 +123,39 @@ public class AiWorkbenchController {
             @PathVariable String projectId,
             @PathVariable String draftId) {
         return previews.createPreview(projectId, draftId);
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-drafts/{draftId}/candidate")
+    public Map<String, Object> registerCandidate(@PathVariable String projectId, @PathVariable String draftId,
+            HttpServletRequest request) {
+        return runs.registerCandidate(projectId, draftId, creatorAuth.requireUser(request));
+    }
+
+    @GetMapping("/device-projects/{projectId}/simulator-versions/{versionId}")
+    public Map<String, Object> getVersion(@PathVariable String projectId, @PathVariable String versionId,
+            HttpServletRequest request) {
+        return runs.getCandidate(projectId, versionId, creatorAuth.requireUser(request));
+    }
+
+    @PostMapping("/simulator-versions/{versionId}/disable")
+    public Map<String, Object> disableVersion(@PathVariable String versionId, HttpServletRequest request) {
+        return runs.disableVersion(versionId, creatorAuth.requireUser(request));
+    }
+
+    @PostMapping("/simulator-versions/{versionId}/runs")
+    public Map<String, Object> startRun(@PathVariable String versionId, HttpServletRequest request) {
+        return runs.startRun(versionId, creatorAuth.requireUser(request));
+    }
+
+    @PostMapping("/simulator-runs/{runId}/heartbeat")
+    public Map<String, Object> heartbeatRun(@PathVariable String runId, HttpServletRequest request) {
+        return runs.heartbeat(runId, creatorAuth.requireUser(request), java.time.Instant.now());
+    }
+
+    @PostMapping("/simulator-runs/{runId}/end")
+    public ResponseEntity<Void> endRun(@PathVariable String runId, HttpServletRequest request) {
+        runs.endRun(runId, creatorAuth.requireUser(request));
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping(value = "/device-projects/{projectId}/packages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

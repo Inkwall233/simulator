@@ -38,6 +38,10 @@ skilllab:
     worker-secret: ${AI_WORKER_SHARED_SECRET:}
     data-dir: ${AI_DATA_DIR:./data/ai-packages}
     preview-ttl-seconds: ${AI_PREVIEW_TTL_SECONDS:900}
+    run-origin-template: ${AI_RUN_ORIGIN_TEMPLATE:http://{runId}.localhost:3001}
+    run-heartbeat-ms: ${AI_RUN_HEARTBEAT_MS:30000}
+    run-idle-ms: ${AI_RUN_IDLE_MS:600000}
+    run-maximum-ms: ${AI_RUN_MAXIMUM_MS:28800000}
     allowed-target-origins: ${AI_ALLOWED_TARGET_ORIGINS:}
 
 logging:

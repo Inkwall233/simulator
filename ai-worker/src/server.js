@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { selectEvidence } from './capture-evidence.js'
 import { validateBehaviorV2 } from './behavior-contract.js'
+import { createRunRegistry } from './runtime-host.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -33,13 +34,17 @@ const maxResponseSampleBytes = 65536
 const previewRoot = path.resolve(
   process.env.AI_PREVIEW_ROOT || path.resolve(process.cwd(), '..', 'skilllab-admin', 'data', 'ai-previews')
 )
+const runRegistryRoot = path.resolve(process.env.AI_RUN_REGISTRY_ROOT || path.resolve(process.cwd(), '..', 'skilllab-admin', 'data', 'ai-runs'))
+const runPackageRoot = path.resolve(process.env.AI_RUN_PACKAGE_ROOT || path.resolve(process.cwd(), '..', 'skilllab-admin', 'data', 'ai-runs'))
 const previewUrlTemplate = process.env.AI_PREVIEW_URL_TEMPLATE || `http://{previewId}.localhost:${port}`
+const runUrlTemplate = process.env.AI_RUN_ORIGIN_TEMPLATE || `http://{runId}.localhost:${port}`
 const previewParentOrigin = normalizeOrigin(process.env.AI_PREVIEW_PARENT_ORIGIN || 'http://localhost:5174')
 const maxPreviewLifetimeMs = 3600000
 const sessions = new Map()
 const previews = new Map()
 const previewsByHost = new Map()
 const previewRuntimeSources = new Map()
+const runRegistryPromise = createRunRegistry(runRegistryRoot)
 let sharedBrowser
 
 app.use(express.json({ limit: '2mb' }))
@@ -320,12 +325,54 @@ app.post('/internal/previews/:id/close', (request, response) => {
   response.json({ closed: true })
 })
 
+app.post('/internal/runs', async (request, response) => {
+  try {
+    const record = request.body || {}
+    const origin = resolveDedicatedOrigin(runUrlTemplate, record.runId, 'runId')
+    const expectedHost = new URL(origin).host.toLowerCase()
+    if (String(record.host || '').toLowerCase() !== expectedHost) throw new Error('Run host does not match configured origin')
+    const sourceDirectory = path.resolve(record.sourceDirectory || '')
+    const relative = path.relative(runPackageRoot, sourceDirectory)
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.basename(sourceDirectory) !== record.runId) {
+      throw new Error('Run package directory is outside AI_RUN_PACKAGE_ROOT')
+    }
+    const info = await stat(path.join(sourceDirectory, 'index.html')).catch(() => null)
+    if (!info?.isFile()) throw new Error('Run package is unavailable')
+    const normalized = { ...record, host: expectedHost, sourceDirectory,
+      draft: validatePreviewDraft(record.draft) }
+    await (await runRegistryPromise).register(normalized)
+    response.status(201).json({ registered: true })
+  } catch (error) { response.status(400).json({ error: publicError(error) }) }
+})
+
+app.post('/internal/runs/:id/heartbeat', async (request, response) => {
+  try {
+    if (request.body?.runId !== request.params.id) throw new Error('Run id mismatch')
+    await (await runRegistryPromise).heartbeat(request.params.id, Number(request.body.expiresAt))
+    response.json({ renewed: true })
+  } catch (error) { response.status(400).json({ error: publicError(error) }) }
+})
+
+app.post('/internal/runs/:id/end', async (request, response) => {
+  try {
+    if (request.body?.runId !== request.params.id) throw new Error('Run id mismatch')
+    await (await runRegistryPromise).end(request.params.id)
+    response.json({ ended: true })
+  } catch (error) { response.status(400).json({ error: publicError(error) }) }
+})
+
 // Preview packages are only served when the request Host exactly matches an
 // ephemeral preview origin registered by the authenticated backend.
 app.use(async (request, response, next) => {
   const preview = findPreviewForRequest(request)
   if (!preview) {
-    next()
+    const run = await (await runRegistryPromise).resolve(request.headers.host)
+    if (!run) { next(); return }
+    const runPreview = { id: run.runId, origin: new URL(`http://${run.host}`).origin,
+      host: run.host, sourceDirectory: run.sourceDirectory, draft: run.draft,
+      expiresAt: new Date(run.expiresAt).toISOString(), parentOrigin: '', runLease: true }
+    try { await servePreviewRequest(runPreview, request, response) }
+    catch (error) { response.status(500).type('text/plain').send(publicError(error)) }
     return
   }
   try {
@@ -363,6 +410,11 @@ const previewCleanup = setInterval(() => {
   }
 }, 30000)
 previewCleanup.unref()
+
+const runCleanup = setInterval(() => {
+  runRegistryPromise.then(registry => registry.cleanupExpired()).catch(() => {})
+}, 30000)
+runCleanup.unref()
 
 async function getBrowser() {
   if (!sharedBrowser || !sharedBrowser.isConnected()) {
@@ -716,18 +768,22 @@ async function createPreview(body) {
 }
 
 function previewOrigin(previewId) {
-  if (!previewUrlTemplate.includes('{previewId}')) {
-    throw new Error('AI_PREVIEW_URL_TEMPLATE must contain {previewId}')
+  return resolveDedicatedOrigin(previewUrlTemplate, previewId, 'previewId')
+}
+
+function resolveDedicatedOrigin(template, id, placeholder) {
+  if (!template.includes(`{${placeholder}}`)) {
+    throw new Error(`Configured origin template must contain {${placeholder}}`)
   }
-  const resolved = previewUrlTemplate.replace('{previewId}', previewId)
-  if (resolved.includes('{previewId}')) {
-    throw new Error('AI_PREVIEW_URL_TEMPLATE must contain {previewId} exactly once')
+  const resolved = template.replace(`{${placeholder}}`, id)
+  if (resolved.includes(`{${placeholder}}`)) {
+    throw new Error(`Configured origin template must contain {${placeholder}} exactly once`)
   }
   const url = new URL(resolved)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
       || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash
-      || !url.hostname.toLowerCase().startsWith(`${previewId}.`)) {
-    throw new Error('AI_PREVIEW_URL_TEMPLATE must create a dedicated HTTP/HTTPS preview origin')
+      || !url.hostname.toLowerCase().startsWith(`${id}.`)) {
+    throw new Error('Configured template must create a dedicated HTTP/HTTPS origin')
   }
   return url.origin
 }
@@ -814,6 +870,7 @@ function closePreview(previewId) {
 }
 
 async function servePreviewRequest(preview, request, response) {
+  response.locals.skilllabParentOrigin = preview.parentOrigin || previewParentOrigin
   if (Date.parse(preview.expiresAt) <= Date.now()) {
     closePreview(preview.id)
     response.status(410).type('text/plain').send('Preview has expired')
@@ -846,6 +903,10 @@ async function servePreviewRequest(preview, request, response) {
     return
   }
   if (pathname === '/__skilllab/config.json') {
+    if (preview.runLease && Date.parse(preview.expiresAt) <= Date.now()) {
+      response.status(410).json({ error: 'Run lease expired' })
+      return
+    }
     setPreviewSecurityHeaders(response)
     response.set('Cache-Control', 'no-store')
     response.json(previewConfig(preview))
@@ -919,12 +980,12 @@ async function previewRuntimeSource(filename) {
 function previewConfig(preview) {
   if (preview.draft.schemaVersion === 'skilllab.simulator-behavior.v2') {
     return { schemaVersion: preview.draft.schemaVersion, previewId: preview.id,
-      parentOrigin: previewParentOrigin, draft: preview.draft }
+      parentOrigin: preview.parentOrigin || previewParentOrigin, draft: preview.draft }
   }
   return {
     schemaVersion: preview.draft.schemaVersion,
     previewId: preview.id,
-    parentOrigin: previewParentOrigin,
+    parentOrigin: preview.parentOrigin || previewParentOrigin,
     draft: {
       draftId: preview.draft.draftId,
       projectId: preview.draft.projectId,
@@ -948,7 +1009,7 @@ function setPreviewSecurityHeaders(response) {
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",
-    `frame-ancestors ${previewParentOrigin}`
+    `frame-ancestors ${response.locals.skilllabParentOrigin || previewParentOrigin}`
   ].join('; ')
   response.set({
     'Content-Security-Policy': csp,
