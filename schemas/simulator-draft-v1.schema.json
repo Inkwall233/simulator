@@ -106,7 +106,7 @@
             "path": { "type": "string", "pattern": "^/" }
           }
         },
-        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "status": { "type": "integer", "minimum": 200, "maximum": 599 },
         "contentType": { "type": ["string", "null"] },
         "body": {},
         "requiresReview": { "type": "boolean" },
@@ -127,10 +127,12 @@
       "required": ["onRuleId", "operation", "path"],
       "properties": {
         "onRuleId": { "type": "string", "minLength": 1 },
-        "operation": { "enum": ["SET", "MERGE", "INCREMENT"] },
+        "operation": { "enum": ["SET", "MERGE", "INCREMENT", "SET_FROM_REQUEST"] },
+        "requestPath": { "type": "string", "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$" },
         "path": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
         "value": {}
-      }
+      },
+      "allOf": [{ "if": { "properties": { "operation": { "const": "SET_FROM_REQUEST" } } }, "then": { "required": ["requestPath"] } }]
     },
     "workflow": {
       "type": "object",

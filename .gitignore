@@ -47,3 +47,6 @@ desktop.ini
 .env.*.local
 .env.ai
 ai-demo-device/device-package.zip
+
+# ---- 一键启动脚本的服务日志与进程记录 ----
+.logs/

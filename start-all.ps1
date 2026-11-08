@@ -7,8 +7,9 @@
         .\start-all.ps1 -TimeoutSeconds 180   自定义等待就绪的超时（默认 120 秒）
 
     说明:
-        每个服务运行在独立的 PowerShell 窗口中，窗口里能看到实时日志；
-        关闭窗口即停止该服务。
+        所有服务都在当前窗口后台运行，不再弹出独立终端；
+        日志写入 .logs\<服务名>.log 与 .logs\<服务名>.err.log。
+        后台进程附着于当前窗口的控制台，关闭窗口即停止全部服务。
 #>
 [CmdletBinding()]
 param(
@@ -39,8 +40,12 @@ $demoDeviceHealthUrl = "$demoDeviceUrl/health"
 $demoPackage = Join-Path $demoDeviceDir 'device-package.zip'
 $aiEnvFile   = Join-Path $root '.env.ai'
 
+$logDir      = Join-Path $root '.logs'
+$pidFile     = Join-Path $logDir 'services.json'
+$servicePids = @{}
+
 $mavenFallback = 'D:\JAVA\apache-maven-3.9.16\bin\mvn.cmd'
-$jdkFallback   = 'C:\Program Files\Eclipse Adoptium\jdk-8.0.504.1-hotspot'
+$jdkFallback   = 'D:\JAVA\JDK8'
 
 function Get-PortOwners {
     param([int]$Port)
@@ -52,6 +57,25 @@ function Get-PortOwners {
 # ---------------------------------------------------------------- 停止模式
 if ($Stop) {
     Write-Host '停止 SkillLab 服务 ...' -ForegroundColor Cyan
+
+    # 先按记录结束整棵进程树（npm -> node、mvn -> java 都在树内），
+    # 单窗口模式下后台进程不再拥有独立窗口，只靠端口清理容易留下壳进程。
+    if (Test-Path -LiteralPath $pidFile) {
+        try {
+            $saved = Get-Content -LiteralPath $pidFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            foreach ($property in $saved.PSObject.Properties) {
+                $processId = [int]$property.Value
+                if ($processId -gt 0) {
+                    taskkill /F /T /PID $processId 2>&1 | Out-Null
+                }
+            }
+        }
+        catch {
+            Write-Host ("  读取进程记录失败: {0}" -f $_.Exception.Message) -ForegroundColor DarkGray
+        }
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
+
     $ports = @($frontends | ForEach-Object { $_.Port }) + $backendPort + $workerPort + $demoDevicePort
     foreach ($port in $ports) {
         $owners = Get-PortOwners -Port $port
@@ -126,7 +150,9 @@ foreach ($tool in 'node', 'npm') {
     }
 }
 
-if (-not $env:JAVA_HOME -and (Test-Path (Join-Path $jdkFallback 'bin\java.exe'))) {
+# 本项目 skilllab-admin 为 Spring Boot 2.7 + java.version=1.8，
+# 后端统一使用 JDK8 启动，不继承系统级 JAVA_HOME（可能是 17/21），避免编译目标与运行时不匹配。
+if (Test-Path (Join-Path $jdkFallback 'bin\java.exe')) {
     $env:JAVA_HOME = $jdkFallback
 }
 
@@ -145,11 +171,40 @@ Write-Host ("Maven     : {0}" -f $(if ($mvnPath) { $mvnPath } else { '(未找到
 Write-Host ("AI env    : {0}" -f $aiEnvFile) -ForegroundColor DarkGray
 Write-Host ''
 
-function Start-ServiceWindow {
-    param([string]$Title, [string]$Dir, [string]$InnerScript)
-    $inner = "`$Host.UI.RawUI.WindowTitle = '$Title'; Set-Location -LiteralPath '$Dir'; $InnerScript"
-    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
-    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoExit', '-NoProfile', '-EncodedCommand', $encoded) | Out-Null
+if (-not (Test-Path -LiteralPath $logDir)) {
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+}
+
+function Start-ServiceProcess {
+    param([string]$Name, [string]$Dir, [string]$Script)
+
+    $outLog = Join-Path $logDir ('{0}.log' -f $Name)
+    $errLog = Join-Path $logDir ('{0}.err.log' -f $Name)
+    $inner = 'cd /d "{0}" && {1}' -f $Dir, $Script
+
+    # -NoNewWindow：子进程附着到当前控制台，不再弹出独立终端窗口；
+    # stdout / stderr 各自重定向到文件，避免多个服务的日志在同一控制台互相穿插。
+    # 用 cmd.exe 而不是 powershell.exe 做宿主：PowerShell 子进程的错误流被重定向后
+    # 会写成 CLIXML 序列化文本，日志不可读；cmd 输出的是纯文本。
+    $process = Start-Process -FilePath 'cmd.exe' `
+        -ArgumentList @('/d', '/c', $inner) `
+        -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+
+    $servicePids[$Name] = $process.Id
+}
+
+function Show-LogTail {
+    param([string]$Name, [int]$Lines = 12)
+
+    foreach ($suffix in @('.log', '.err.log')) {
+        $file = Join-Path $logDir ('{0}{1}' -f $Name, $suffix)
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        $tail = Get-Content -LiteralPath $file -Tail $Lines -ErrorAction SilentlyContinue
+        if (-not $tail) { continue }
+        Write-Host ("    {0}:" -f (Split-Path -Leaf $file)) -ForegroundColor DarkGray
+        foreach ($line in $tail) { Write-Host ("      " + $line) -ForegroundColor DarkGray }
+    }
 }
 
 # ---------------------------------------------------------------- 生成并启动本地演示设备
@@ -158,9 +213,25 @@ if (-not (Test-Path (Join-Path $demoPublicDir 'index.html'))) {
     throw "演示设备页面不存在: $demoPublicDir"
 }
 Write-Host '生成可上传的演示设备 ZIP ...' -ForegroundColor Cyan
-Compress-Archive -Path (Join-Path $demoPublicDir '*') -DestinationPath $demoPackage -Force
+# 直接覆盖已有 zip 会被杀软/索引器短暂锁定而报 Access denied，
+# 改为先尝试删除旧包、压缩到临时文件后再替换，并带少量重试。
+if (Test-Path -LiteralPath $demoPackage) {
+    Remove-Item -LiteralPath $demoPackage -Force -ErrorAction SilentlyContinue
+}
+$demoPackageTemp = $demoPackage + '.tmp.zip'
+Compress-Archive -Path (Join-Path $demoPublicDir '*') -DestinationPath $demoPackageTemp -Force
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        Move-Item -LiteralPath $demoPackageTemp -Destination $demoPackage -Force -ErrorAction Stop
+        break
+    }
+    catch {
+        if ($attempt -eq 5) { throw }
+        Start-Sleep -Milliseconds 400
+    }
+}
 Write-Host ("  √ 上传包: {0}" -f $demoPackage) -ForegroundColor Green
-Start-ServiceWindow -Title 'ai-demo-device' -Dir $demoDeviceDir -InnerScript 'npm start'
+Start-ServiceProcess -Name 'ai-demo-device' -Dir $demoDeviceDir -Script 'npm start'
 Write-Host ("  √ {0,-16} {1}" -f 'ai-demo-device', $demoDeviceUrl) -ForegroundColor Green
 
 # ---------------------------------------------------------------- 启动前端
@@ -171,7 +242,7 @@ foreach ($frontend in $frontends) {
         Push-Location $frontend.Dir
         try { & npm install --no-fund --no-audit } finally { Pop-Location }
     }
-    Start-ServiceWindow -Title $frontend.Name -Dir $frontend.Dir -InnerScript 'npm run dev'
+    Start-ServiceProcess -Name $frontend.Name -Dir $frontend.Dir -Script 'npm run dev'
     Write-Host ("  √ {0,-16} {1}" -f $frontend.Name, $frontend.Url) -ForegroundColor Green
 }
 
@@ -219,17 +290,16 @@ try {
 }
 finally { Pop-Location }
 
-Start-ServiceWindow -Title 'ai-worker' -Dir $workerDir -InnerScript 'npm start'
+Start-ServiceProcess -Name 'ai-worker' -Dir $workerDir -Script 'npm start'
 Write-Host ("  √ {0,-16} {1}" -f 'ai-worker', $workerUrl) -ForegroundColor Green
 
 # ---------------------------------------------------------------- 启动后端
 Write-Host '启动后端 ...' -ForegroundColor Cyan
 if ($mvnPath) {
-    $backendScript = "& '$mvnPath' spring-boot:run"
-    if ($env:JAVA_HOME) {
-        $backendScript = "`$env:JAVA_HOME = '$env:JAVA_HOME'; $backendScript"
-    }
-    Start-ServiceWindow -Title 'skilllab-admin' -Dir $backendDir -InnerScript $backendScript
+    # 子进程用 cmd 启动，故按 cmd 语法拼接；JAVA_HOME 已在本进程环境中设置，
+    # cmd 子进程会直接继承，无需在命令里重复赋值。
+    $backendScript = '"{0}" spring-boot:run' -f $mvnPath
+    Start-ServiceProcess -Name 'skilllab-admin' -Dir $backendDir -Script $backendScript
     Write-Host ("  √ {0,-16} {1}" -f 'skilllab-admin', $backendUrl) -ForegroundColor Green
 }
 else {
@@ -273,12 +343,17 @@ foreach ($target in $targets) {
         Write-Host ("  √ {0,-16} {1}" -f $target.Name, $target.Url) -ForegroundColor Green
     }
     else {
-        Write-Host ("  × {0,-16} 健康检查失败（端口 {1}），请查看对应窗口的日志或检查端口占用" -f $target.Name, $target.Port) -ForegroundColor Red
+        Write-Host ("  × {0,-16} 健康检查失败（端口 {1}）" -f $target.Name, $target.Port) -ForegroundColor Red
+        Show-LogTail -Name $target.Name
     }
 }
 
+$servicePids | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
+
 Write-Host ''
-Write-Host '各服务运行在独立窗口中，关闭窗口即停止该服务。' -ForegroundColor DarkGray
-Write-Host '也可执行 .\start-all.ps1 -Stop 一键停止全部服务。' -ForegroundColor DarkGray
+Write-Host '全部服务已在当前窗口后台运行，无独立终端窗口。' -ForegroundColor DarkGray
+Write-Host ("日志目录: {0}" -f $logDir) -ForegroundColor DarkGray
+Write-Host '查看实时日志: Get-Content .\.logs\web-simulator.log -Wait -Tail 20' -ForegroundColor DarkGray
+Write-Host '关闭当前窗口即停止全部服务，也可执行 .\start-all.ps1 -Stop 一键停止。' -ForegroundColor DarkGray
 Write-Host 'AI 工作台入口: http://localhost:5174/ai-workbench' -ForegroundColor Cyan
 Write-Host ("演示设备入口: {0}  |  演示账号: admin / demo123" -f $demoDeviceUrl) -ForegroundColor Cyan
