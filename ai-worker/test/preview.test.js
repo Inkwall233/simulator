@@ -139,6 +139,8 @@ test('v2 preview executes conditional write and read-back in the browser', { tim
     await page.goto(`http://${id}.localhost:${port}/__skilllab/start`)
     await page.waitForURL(`http://${id}.localhost:${port}/`)
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+    assert.match(await page.locator('body').innerText(), /Device/)
+    assert.equal(await page.evaluate(() => fetch('/api/unmodeled').then(response => response.status)), 501)
     const results = await page.evaluate(async () => {
       const read = () => fetch('/api/config').then(response => response.json())
       const initial = await read()
@@ -154,6 +156,59 @@ test('v2 preview executes conditional write and read-back in the browser', { tim
     assert.equal(await page.evaluate(() => fetch('/api/config').then(response => response.json()).then(body => body.enabled)), true)
   } finally {
     await browser?.close()
+    worker.kill()
+    await new Promise(resolve => worker.exitCode !== null ? resolve() : worker.once('exit', resolve))
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('internal validator replays confirmed assertions in an isolated browser', { timeout: 60000 }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skilllab-validation-'))
+  const id = 'f'.repeat(32)
+  await mkdir(path.join(root, id))
+  await writeFile(path.join(root, id, 'index.html'), '<!doctype html><html><head></head><body>Device</body></html>')
+  const behavior = JSON.parse(await readFile(new URL('../../schemas/examples/simulator-behavior-v2.example.json', import.meta.url)))
+  behavior.verificationCases = [{ id: 'save', steps: [
+    { method: 'GET', path: '/api/config', expectedStatus: 200, expectedBody: { enabled: false }, expectedRuleId: 'read-config' },
+    { method: 'PUT', path: '/api/config', body: { enabled: true }, expectedStatus: 200, expectedBody: { ok: true, enabled: true }, expectedRuleId: 'save-config' },
+    { method: 'GET', path: '/api/config', reloadBefore: true, expectedStatus: 200, expectedBody: { enabled: true }, expectedRuleId: 'read-config' }
+  ], expectedState: { config: { enabled: true } } }]
+  const port = 39000 + Math.floor(Math.random() * 9000)
+  const worker = spawn(process.execPath, ['src/server.js'], { cwd: new URL('..', import.meta.url), windowsHide: true,
+    env: { ...process.env, PORT: String(port), AI_WORKER_SHARED_SECRET: 'validation-secret', AI_PREVIEW_ROOT: root } })
+  const base = `http://127.0.0.1:${port}`
+  const headers = { 'Content-Type': 'application/json', 'X-SkillLab-Worker-Key': 'validation-secret' }
+  try {
+    let ready = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await fetch(base + '/health').then(r => r.ok).catch(() => false)) { ready = true; break }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.ok(ready)
+    const created = await fetch(base + '/internal/previews', { method: 'POST', headers,
+      body: JSON.stringify({ previewId: id, sourceDirectory: path.join(root, id),
+        expiresAt: new Date(Date.now() + 60000).toISOString(), draft: behavior }) })
+    assert.equal(created.status, 201, await created.text().catch(() => ''))
+    const result = await fetch(base + `/internal/previews/${id}/validate`, { method: 'POST', headers, body: '{}' })
+    assert.equal(result.status, 200)
+    const report = await result.json()
+    assert.equal(report.status, 'PASSED', JSON.stringify(report.blockers))
+    assert.equal(report.cases.find(item => item.id === 'save:browser').steps.length, 3)
+    await fetch(base + `/internal/previews/${id}/close`, { method: 'POST', headers, body: JSON.stringify({ previewId: id }) })
+    const unsafeId = 'e'.repeat(32)
+    await mkdir(path.join(root, unsafeId))
+    await writeFile(path.join(root, unsafeId, 'index.html'),
+      '<!doctype html><html><head><script>fetch("https://external.invalid/leak"); throw new Error("package failed")</script></head><body>Device</body></html>')
+    const unsafe = await fetch(base + '/internal/previews', { method: 'POST', headers,
+      body: JSON.stringify({ previewId: unsafeId, sourceDirectory: path.join(root, unsafeId),
+        expiresAt: new Date(Date.now() + 60000).toISOString(), draft: behavior }) })
+    assert.equal(unsafe.status, 201)
+    const blocked = await fetch(base + `/internal/previews/${unsafeId}/validate`, { method: 'POST', headers, body: '{}' })
+    const blockedReport = await blocked.json()
+    assert.equal(blockedReport.status, 'BLOCKED', JSON.stringify(blockedReport))
+    assert.ok(blockedReport.blockers.some(item => item.code === 'PAGE_ERROR'))
+    assert.ok(blockedReport.blockers.some(item => item.code === 'EXTERNAL_REQUEST'))
+  } finally {
     worker.kill()
     await new Promise(resolve => worker.exitCode !== null ? resolve() : worker.once('exit', resolve))
     await rm(root, { recursive: true, force: true })

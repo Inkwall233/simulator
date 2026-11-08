@@ -20,5 +20,9 @@
       "evidence": { "type": "CAPTURED", "observationIds": ["save", "read-after"], "note": "" }
     }
   ],
-  "verificationCases": [{ "id": "config-save", "critical": true, "expectedState": { "config": { "enabled": true } } }]
+  "verificationCases": [{ "id": "config-save", "steps": [
+    { "method": "GET", "path": "/api/config", "expectedRuleId": "read-config", "expectedStatus": 200, "expectedBody": { "enabled": false } },
+    { "method": "PUT", "path": "/api/config", "body": { "enabled": true }, "expectedRuleId": "save-config", "expectedStatus": 200, "expectedBody": { "ok": true, "enabled": true } },
+    { "method": "GET", "path": "/api/config", "reloadBefore": true, "expectedRuleId": "read-config", "expectedStatus": 200, "expectedBody": { "enabled": true } }
+  ], "expectedState": { "config": { "enabled": true } } }]
 }

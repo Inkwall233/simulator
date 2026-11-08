@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -68,10 +70,29 @@ public class AiPreviewService {
                 .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Package version not found"));
         Path archive = Paths.get(packageVersion.getStoredPath()).toAbsolutePath().normalize();
         if (!archive.startsWith(packageDirectory) || !Files.isRegularFile(archive)) throw new IllegalStateException("Stored package is unavailable");
+        verifyArchive(packageVersion);
         Path destination = runDirectory.resolve(runId).normalize();
         if (!destination.getParent().equals(runDirectory)) throw new IllegalArgumentException("Invalid run package path");
         try { extractArchive(archive, destination, runDirectory); return destination; }
         catch (IOException | RuntimeException exception) { deleteRunPackage(runId); throw new IllegalStateException("Could not prepare run package", exception); }
+    }
+
+    public void verifyArchive(AiPackageEntity packageVersion) {
+        Path archive = Paths.get(packageVersion.getStoredPath()).toAbsolutePath().normalize();
+        if (!archive.startsWith(packageDirectory) || !Files.isRegularFile(archive))
+            throw new IllegalStateException("Stored package is unavailable");
+        try (InputStream input = Files.newInputStream(archive)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+            StringBuilder hash = new StringBuilder();
+            for (byte item : digest.digest()) hash.append(String.format("%02x", item & 0xff));
+            if (!packageVersion.getSha256().equalsIgnoreCase(hash.toString()))
+                throw new IllegalStateException("Stored package digest has changed");
+        } catch (IOException | NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Could not verify stored package", exception);
+        }
     }
 
     public void deleteRunPackage(String runId) {
@@ -101,6 +122,7 @@ public class AiPreviewService {
         if (!sourceArchive.startsWith(packageDirectory) || !Files.isRegularFile(sourceArchive)) {
             throw new IllegalStateException("Stored package archive is unavailable");
         }
+        verifyArchive(packageVersion);
 
         String previewId = UUID.randomUUID().toString().replace("-", "");
         Path destination = previewDirectory.resolve(previewId).normalize();

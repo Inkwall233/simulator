@@ -21,6 +21,7 @@ self.addEventListener('activate', function (event) {
 self.addEventListener('fetch', function (event) {
   const requestUrl = new URL(event.request.url)
   if (requestUrl.origin !== self.location.origin || requestUrl.pathname.startsWith('/__skilllab/')) return
+  if (event.request.mode === 'navigate' || event.request.destination) return
   const result = requestQueue.then(function () { return handleRequest(event.request, requestUrl) })
   requestQueue = result.catch(function () {})
   event.respondWith(result)
@@ -61,7 +62,7 @@ async function handleRequest(request, requestUrl) {
       notifyClients(result.ruleId ? 'RULE_HIT' : 'UNMATCHED_REQUEST', {
         ruleId: result.ruleId, method, path: requestUrl.pathname, status: result.response.status
       })
-      return responseForBehavior(result.response)
+      return responseForBehavior(result.response, result.ruleId)
     }
     const rules = Array.isArray(config?.draft?.apiMocks?.rules) ? config.draft.apiMocks.rules : []
     const rule = rules.find(function (candidate) {
@@ -95,11 +96,13 @@ async function handleRequest(request, requestUrl) {
   }
 }
 
-function responseForBehavior(result) {
+function responseForBehavior(result, ruleId) {
   const type = result.contentType || 'application/json; charset=utf-8'
   const body = [204, 205, 304].includes(result.status) ? null
     : /application\/json/i.test(type) ? JSON.stringify(result.body) : String(result.body)
-  return new Response(body, { status: result.status, headers: { 'Cache-Control': 'no-store', 'Content-Type': type } })
+  const headers = { 'Cache-Control': 'no-store', 'Content-Type': type }
+  if (ruleId) headers['X-SkillLab-Mock-Rule'] = ruleId
+  return new Response(body, { status: result.status, headers })
 }
 
 async function readRequestBody(request) {

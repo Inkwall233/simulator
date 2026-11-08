@@ -80,6 +80,35 @@ export interface SimulatorVersion {
   behaviorSha256: string
 }
 
+export interface ValidationFinding { code: string; message: string; caseId?: string | null }
+export interface ValidationReport {
+  reportId: string
+  versionId: string
+  status: 'PASSED' | 'BLOCKED'
+  runtimeVersion: string
+  packageSha256: string
+  behaviorSha256: string
+  blockers: ValidationFinding[]
+  warnings: ValidationFinding[]
+  cases: Array<{ id: string; passed: boolean; steps: Array<{ method: string; path: string; status: number; passed: boolean }> }>
+  pageErrors: string[]
+  externalRequests: string[]
+}
+
+export function validateCandidate(projectId: string, versionId: string): Promise<ValidationReport> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId + '/validate', { method: 'POST' })
+}
+
+export function getValidationReport(projectId: string, versionId: string, reportId: string): Promise<ValidationReport> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId + '/reports/' + reportId)
+}
+
+export function enableCandidate(projectId: string, versionId: string, reportId: string, acknowledgeWarnings: boolean): Promise<SimulatorVersion> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId + '/enable', {
+    method: 'POST', body: JSON.stringify({ reportId, acknowledgeWarnings })
+  })
+}
+
 export function createBehaviorRevision(projectId: string, sourceApiDraftId: string, behavior: Record<string, unknown>): Promise<SimulatorDraft> {
   return aiRequest('/device-projects/' + projectId + '/simulator-drafts/v2', {
     method: 'POST', body: JSON.stringify({ sourceApiDraftId, behavior })

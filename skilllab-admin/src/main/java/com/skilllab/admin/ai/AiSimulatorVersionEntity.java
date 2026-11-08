@@ -5,6 +5,7 @@ import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
+import javax.persistence.Version;
 
 @Entity
 @Table(name = "ai_simulator_version")
@@ -18,6 +19,9 @@ public class AiSimulatorVersionEntity {
     @Column(nullable = false, length = 64) private String behaviorSha256;
     @Column(nullable = false) private Instant createdAt;
     @Column private Instant enabledAt;
+    @Column(length = 36) private String validationReportId;
+    @Column(length = 64) private String runtimeSha256;
+    @Version private Long revision;
 
     protected AiSimulatorVersionEntity() { }
 
@@ -32,7 +36,10 @@ public class AiSimulatorVersionEntity {
         this.createdAt = Instant.now();
     }
 
-    public void enable() { if (!"CANDIDATE".equals(status)) throw new IllegalStateException("Version is not a candidate"); status = "ENABLED"; enabledAt = Instant.now(); }
+    public void enable(String reportId, String runtimeHash) {
+        if (!"CANDIDATE".equals(status)) throw new IllegalStateException("Version is not a candidate");
+        validationReportId = reportId; runtimeSha256 = runtimeHash; status = "ENABLED"; enabledAt = Instant.now();
+    }
     public void disable() { status = "DISABLED"; }
     public String getId() { return id; }
     public String getDraftId() { return draftId; }
@@ -41,4 +48,6 @@ public class AiSimulatorVersionEntity {
     public String getStatus() { return status; }
     public String getPackageSha256() { return packageSha256; }
     public String getBehaviorSha256() { return behaviorSha256; }
+    public String getValidationReportId() { return validationReportId; }
+    public String getRuntimeSha256() { return runtimeSha256; }
 }

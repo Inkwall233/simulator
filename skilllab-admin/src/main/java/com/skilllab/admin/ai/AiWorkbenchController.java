@@ -31,11 +31,13 @@ public class AiWorkbenchController {
     private final AiPreviewService previews;
     private final AiEvidenceService evidence;
     private final AiRunService runs;
+    private final AiValidationService validations;
     private final AiCreatorAuth creatorAuth;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
             AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
-            AiPreviewService previews, AiEvidenceService evidence, AiRunService runs, AiCreatorAuth creatorAuth) {
+            AiPreviewService previews, AiEvidenceService evidence, AiRunService runs,
+            AiValidationService validations, AiCreatorAuth creatorAuth) {
         this.service = service;
         this.worker = worker;
         this.drafts = drafts;
@@ -43,6 +45,7 @@ public class AiWorkbenchController {
         this.previews = previews;
         this.evidence = evidence;
         this.runs = runs;
+        this.validations = validations;
         this.creatorAuth = creatorAuth;
     }
 
@@ -135,6 +138,25 @@ public class AiWorkbenchController {
     public Map<String, Object> getVersion(@PathVariable String projectId, @PathVariable String versionId,
             HttpServletRequest request) {
         return runs.getCandidate(projectId, versionId, creatorAuth.requireUser(request));
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-versions/{versionId}/validate")
+    public Map<String, Object> validateVersion(@PathVariable String projectId, @PathVariable String versionId,
+            HttpServletRequest request) {
+        return validations.validate(projectId, versionId, creatorAuth.requireUser(request));
+    }
+
+    @GetMapping("/device-projects/{projectId}/simulator-versions/{versionId}/reports/{reportId}")
+    public Map<String, Object> getValidationReport(@PathVariable String projectId, @PathVariable String versionId,
+            @PathVariable String reportId, HttpServletRequest request) {
+        return validations.getReport(projectId, versionId, reportId, creatorAuth.requireUser(request));
+    }
+
+    @PostMapping("/device-projects/{projectId}/simulator-versions/{versionId}/enable")
+    public Map<String, Object> enableVersion(@PathVariable String projectId, @PathVariable String versionId,
+            @RequestBody Map<String, Object> requestBody, HttpServletRequest request) {
+        return validations.enable(projectId, versionId, String.valueOf(requestBody.get("reportId")),
+                creatorAuth.requireUser(request), Boolean.TRUE.equals(requestBody.get("acknowledgeWarnings")));
     }
 
     @PostMapping("/simulator-versions/{versionId}/disable")
@@ -260,6 +282,16 @@ public class AiWorkbenchController {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> invalidRequest(IllegalArgumentException exception) {
         return error(HttpStatus.BAD_REQUEST, exception.getMessage());
+    }
+
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<Map<String, String>> forbidden(SecurityException exception) {
+        return error(HttpStatus.FORBIDDEN, exception.getMessage());
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> conflict(IllegalStateException exception) {
+        return error(HttpStatus.CONFLICT, exception.getMessage());
     }
 
     @ExceptionHandler(AiWorkerClient.AiWorkerException.class)

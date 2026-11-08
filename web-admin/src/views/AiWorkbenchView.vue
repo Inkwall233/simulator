@@ -10,6 +10,9 @@ import {
   importLegacyDraft,
   registerCandidate,
   getSimulatorVersion,
+  validateCandidate,
+  getValidationReport,
+  enableCandidate,
   fetchScreenshot,
   uploadPackage,
   type BrowserSession,
@@ -20,6 +23,7 @@ import {
   type SimulatorDraft,
   type SimulatorPreview,
   type SimulatorVersion,
+  type ValidationReport,
   createSimulatorDraft as createSimulatorDraftRequest
 } from '@/api/ai-workbench'
 
@@ -84,6 +88,44 @@ const parsedBehavior = computed(() => {
 const behaviorRules = computed(() => Array.isArray(parsedBehavior.value?.rules)
   ? parsedBehavior.value.rules as Array<Record<string, unknown>> : [])
 const behaviorScope = computed(() => parsedBehavior.value?.scope as Record<string, unknown> | undefined)
+const verificationCases = computed(() => Array.isArray(parsedBehavior.value?.verificationCases)
+  ? parsedBehavior.value.verificationCases as Array<Record<string, unknown>> : [])
+function addVerificationCase() {
+  updateBehavior(model => {
+    (model.verificationCases as Array<Record<string, unknown>>).push({ id: 'case-' + Date.now(), steps: [], expectedState: structuredClone(model.initialState) })
+  })
+}
+function addVerificationStep(caseIndex: number) {
+  updateBehavior(model => {
+    const testCase = (model.verificationCases as Array<Record<string, unknown>>)[caseIndex]
+    const rule = (model.rules as Array<Record<string, unknown>>)[0]
+    const match = rule.match as Record<string, unknown>
+    const response = rule.response as Record<string, unknown>
+    (testCase.steps as Array<Record<string, unknown>>).push({ method: match.method, path: match.path,
+      expectedStatus: response.status, expectedBody: response.body, expectedRuleId: rule.id })
+  })
+}
+function editVerificationCase(index: number, field: string, value: string) {
+  try { updateBehavior(model => { (model.verificationCases as Array<Record<string, unknown>>)[index][field] = field === 'expectedState' ? JSON.parse(value) : value }) }
+  catch { showError('状态断言必须是有效 JSON') }
+}
+function editVerificationStep(caseIndex: number, stepIndex: number, field: string, value: string | boolean) {
+  try {
+    updateBehavior(model => {
+      const testCase = (model.verificationCases as Array<Record<string, unknown>>)[caseIndex]
+      const step = (testCase.steps as Array<Record<string, unknown>>)[stepIndex]
+      if (field === 'body' && ['GET', 'HEAD'].includes(String(step.method))) delete step.body
+      else if (field === 'body' || field === 'expectedBody') step[field] = JSON.parse(String(value))
+      else if (field === 'expectedStatus') step[field] = Number(value)
+      else if (field === 'method') {
+        step[field] = value
+        if (value === 'GET' || value === 'HEAD') delete step.body
+      }
+      else if (field === 'reloadBefore' && !value) delete step[field]
+      else step[field] = value
+    })
+  } catch { showError('请求体与响应断言必须是有效 JSON') }
+}
 function updateBehavior(change: (model: Record<string, unknown>) => void) {
   if (!parsedBehavior.value) return
   const next = structuredClone(parsedBehavior.value)
@@ -110,6 +152,55 @@ const revisionSourceId = ref('')
 const savingRevision = ref(false)
 const candidate = ref<SimulatorVersion | null>(null)
 const candidateBusy = ref(false)
+const validationReport = ref<ValidationReport | null>(null)
+const reportIdInput = ref('')
+const validating = ref(false)
+const acknowledgeWarnings = ref(false)
+
+async function runValidation() {
+  const version = candidate.value
+  if (!version) return
+  const projectId = selectedProjectId.value
+  validating.value = true
+  validationReport.value = null
+  acknowledgeWarnings.value = false
+  try {
+    const report = await validateCandidate(projectId, version.versionId)
+    if (projectId === selectedProjectId.value && candidate.value?.versionId === version.versionId) validationReport.value = report
+    if (projectId === selectedProjectId.value) reportIdInput.value = report.reportId
+  } catch (reason) { showError((reason as Error).message) }
+  finally { validating.value = false }
+}
+
+async function loadReport() {
+  if (!candidate.value || !reportIdInput.value.trim()) return
+  const versionId = candidate.value.versionId
+  const projectId = selectedProjectId.value
+  try {
+    const [report, version] = await Promise.all([
+      getValidationReport(projectId, versionId, reportIdInput.value.trim()),
+      getSimulatorVersion(projectId, versionId)
+    ])
+    if (projectId !== selectedProjectId.value || candidate.value?.versionId !== versionId) return
+    validationReport.value = report
+    candidate.value = version
+    acknowledgeWarnings.value = false
+  }
+  catch (reason) { showError((reason as Error).message) }
+}
+
+async function enableValidated() {
+  const report = validationReport.value
+  const version = candidate.value
+  if (!report || !version || report.status !== 'PASSED') return
+  candidateBusy.value = true
+  try {
+    await enableCandidate(selectedProjectId.value, version.versionId, report.reportId, acknowledgeWarnings.value)
+    await refreshCandidate()
+    addEvent('模拟器版本已启用', 'success')
+  } catch (reason) { showError((reason as Error).message) }
+  finally { candidateBusy.value = false }
+}
 
 async function selectDraft(draft: SimulatorDraft) {
   const projectId = selectedProjectId.value
@@ -164,6 +255,7 @@ async function confirmRevision() {
     simulatorDraft.value = created
     selectedDraftId.value = created.id
     candidate.value = null
+    validationReport.value = null
     addEvent('已确认并保存不可变行为修订 v' + created.versionNumber, 'success')
     activeView.value = 'validation'
   } catch (reason) { showError((reason as Error).message) }
@@ -179,6 +271,7 @@ async function makeCandidate() {
     const result = await registerCandidate(projectId, draft.id)
     if (projectId !== selectedProjectId.value) return
     candidate.value = result
+    validationReport.value = null
     activeView.value = 'version'
   } catch (reason) { showError((reason as Error).message) }
   finally { candidateBusy.value = false }
@@ -293,6 +386,8 @@ watch(selectedProjectId, async (id) => {
   behaviorRevisionJson.value = ''
   revisionSourceId.value = ''
   candidate.value = null
+  validationReport.value = null
+  reportIdInput.value = ''
   pendingProposal.value = null
   apiDraft.value = null
   apiDraftId.value = ''
@@ -927,6 +1022,21 @@ function sizeLabel(size: number) {
                   <label class="wb-label" :for="'rule-evidence-'+index">证据说明 / 推断依据</label>
                   <input :id="'rule-evidence-'+index" class="wb-input" :value="(rule.evidence as Record<string, unknown>)?.note" @change="updateBehavior(model => { ((model.rules as Array<Record<string, unknown>>)[index].evidence as Record<string, unknown>).note = ($event.target as HTMLInputElement).value })" />
                 </div>
+                <div class="wb-editor-mode"><strong>验证用例</strong><button class="wb-secondary" @click="addVerificationCase">添加用例</button></div>
+                <div v-for="(testCase, caseIndex) in verificationCases" :key="String(testCase.id)" class="wb-rule-editor">
+                  <label class="wb-label">用例名称 <input class="wb-input" :value="testCase.id" @change="editVerificationCase(caseIndex, 'id', ($event.target as HTMLInputElement).value)" /></label>
+                  <div v-for="(step, stepIndex) in (testCase.steps as Array<Record<string, unknown>> || [])" :key="stepIndex" class="wb-verification-step">
+                    <select class="wb-input" :value="step.method" @change="editVerificationStep(caseIndex, stepIndex, 'method', ($event.target as HTMLSelectElement).value)"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+                    <input class="wb-input" :value="step.path" placeholder="/api/config" @change="editVerificationStep(caseIndex, stepIndex, 'path', ($event.target as HTMLInputElement).value)" />
+                    <input class="wb-input" :value="step.expectedRuleId" placeholder="命中规则 ID" @change="editVerificationStep(caseIndex, stepIndex, 'expectedRuleId', ($event.target as HTMLInputElement).value)" />
+                    <input class="wb-input" type="number" min="200" max="399" :value="step.expectedStatus" aria-label="期望状态码" @change="editVerificationStep(caseIndex, stepIndex, 'expectedStatus', ($event.target as HTMLInputElement).value)" />
+                    <label>请求体 JSON <textarea :disabled="step.method === 'GET' || step.method === 'HEAD'" :value="JSON.stringify(step.body ?? null, null, 2)" rows="3" @change="editVerificationStep(caseIndex, stepIndex, 'body', ($event.target as HTMLTextAreaElement).value)" /></label>
+                    <label>期望响应 JSON <textarea :value="JSON.stringify(step.expectedBody, null, 2)" rows="3" @change="editVerificationStep(caseIndex, stepIndex, 'expectedBody', ($event.target as HTMLTextAreaElement).value)" /></label>
+                    <label><input type="checkbox" :checked="step.reloadBefore === true" @change="editVerificationStep(caseIndex, stepIndex, 'reloadBefore', ($event.target as HTMLInputElement).checked)" /> 此步骤前刷新页面</label>
+                  </div>
+                  <button class="wb-secondary" @click="addVerificationStep(caseIndex)">添加请求步骤</button>
+                  <label class="wb-label">最终状态断言 JSON <textarea :value="JSON.stringify(testCase.expectedState, null, 2)" rows="4" @change="editVerificationCase(caseIndex, 'expectedState', ($event.target as HTMLTextAreaElement).value)" /></label>
+                </div>
               </template>
               <template v-else><label class="wb-label" for="behavior-v2-json">高级 JSON</label><textarea id="behavior-v2-json" v-model="behaviorRevisionJson" rows="20" spellcheck="false" /></template>
               <button class="wb-primary" :disabled="savingRevision || !revisionSourceId" @click="confirmRevision">{{ savingRevision ? '保存中…' : '人工确认并保存新修订' }}</button>
@@ -934,18 +1044,32 @@ function sizeLabel(size: number) {
           </section>
           <section v-if="activeView === 'validation'" class="wb-workflow-panel">
             <div class="wb-section-title"><div><span>VALIDATION</span><h2>隔离验证</h2></div></div>
-            <p>选择已保存的 v2 修订，在隔离预览中检查设备页面、接口命中与状态读回。</p>
+            <p>选择已保存的 v2 修订，在隔离预览中检查设备页面，并为关键链路填写请求、期望响应与最终状态断言。</p>
             <div v-for="draft in simulatorDrafts" :key="draft.id" class="wb-saved-draft-row">
               <span>v{{ draft.versionNumber }} · {{ draft.status }}</span>
               <button class="wb-secondary" :disabled="openingPreview" @click="openPreview(draft)">隔离预览</button>
               <button class="wb-secondary" @click="selectDraft(draft)">查看修订</button>
             </div>
             <button v-if="selectedDraft?.payload?.schemaVersion === 'skilllab.simulator-behavior.v2'" class="wb-primary" :disabled="candidateBusy" @click="makeCandidate">登记候选版本</button>
-            <p>自动验证报告和启用门禁尚未接入；候选版本不能通过普通入口运行。</p>
+            <button v-if="candidate?.status === 'CANDIDATE'" class="wb-secondary" :disabled="validating" @click="runValidation">{{ validating ? '验证中…' : '运行工程验证' }}</button>
+            <div v-if="candidate" class="wb-report-lookup"><input v-model="reportIdInput" class="wb-input" placeholder="报告 ID" aria-label="报告 ID" /><button class="wb-secondary" :disabled="!reportIdInput.trim()" @click="loadReport">查看报告</button></div>
+            <div v-if="validationReport" class="wb-validation-report">
+              <strong>{{ validationReport.status === 'PASSED' ? '验证通过' : '验证阻断' }} · {{ validationReport.runtimeVersion }}</strong>
+              <p v-for="(finding, index) in validationReport.blockers" :key="'blocker-'+index" class="wb-blocker">{{ finding.caseId ? finding.caseId + ' · ' : '' }}{{ finding.message }}</p>
+              <button v-if="validationReport.blockers.length" class="wb-secondary" @click="activeView = 'behavior'">修改行为修订</button>
+              <p v-for="(finding, index) in validationReport.warnings" :key="'warning-'+index" class="wb-warning">{{ finding.message }}</p>
+              <div v-for="item in validationReport.cases" :key="item.id" class="wb-report-case">
+                <strong>{{ item.id }} · {{ item.passed ? '通过' : '失败' }}</strong>
+                <span v-for="(step, index) in item.steps" :key="index">{{ step.method }} {{ step.path }} · {{ step.status }} · {{ step.passed ? '通过' : '失败' }}</span>
+              </div>
+              <label v-if="validationReport.warnings.length" class="wb-risk-confirm"><input v-model="acknowledgeWarnings" type="checkbox" /> 我已审查并接受报告中的非阻断风险</label>
+              <button v-if="validationReport.status === 'PASSED' && candidate?.status === 'CANDIDATE'" class="wb-primary"
+                :disabled="candidateBusy || (!!validationReport.warnings.length && !acknowledgeWarnings)" @click="enableValidated">启用已验证版本</button>
+            </div>
           </section>
           <section v-if="activeView === 'version'" class="wb-workflow-panel">
             <div class="wb-section-title"><div><span>VERSION</span><h2>版本状态</h2></div><button v-if="candidate" class="wb-secondary" @click="refreshCandidate">刷新</button></div>
-            <template v-if="candidate"><p>版本 {{ candidate.versionId }} · {{ candidate.status }}</p><p>包 SHA-256 {{ candidate.packageSha256 }}</p><p>行为 SHA-256 {{ candidate.behaviorSha256 }}</p></template>
+            <template v-if="candidate"><p>版本 {{ candidate.versionId }} · {{ candidate.status }}</p><p>包 SHA-256 {{ candidate.packageSha256 }}</p><p>行为 SHA-256 {{ candidate.behaviorSha256 }}</p><button v-if="candidate.status === 'CANDIDATE'" class="wb-primary" @click="activeView = 'validation'">前往验证</button></template>
             <p v-else>尚未登记候选版本。选择 v2 行为修订并完成隔离预览后登记。</p>
           </section>
         </main>
@@ -963,6 +1087,10 @@ function sizeLabel(size: number) {
 .wb-views button.active span{background:#315ec6;color:#fff}
 .wb-workflow-panel{min-width:0;padding:18px 0;border-top:1px solid #dce3eb;color:#4c5b6e;font-size:12px;overflow-wrap:anywhere}
 .wb-workflow-panel p{line-height:1.6}.wb-workflow-panel .wb-saved-draft-row{padding:10px 0;border-bottom:1px solid #e4e9ef}
+.wb-validation-report{display:grid;gap:8px;margin-top:16px;padding:12px 0;border-top:1px solid #dce3eb}
+.wb-report-lookup{display:flex;gap:8px;max-width:500px;margin-top:12px}
+.wb-validation-report p{margin:0}.wb-blocker{color:#a33f3f}.wb-warning{color:#95691d}
+.wb-report-case{display:grid;gap:4px;padding:9px 0;border-top:1px solid #e4e9ef}.wb-risk-confirm{display:flex;align-items:center;gap:8px}
 .wb-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:19px}
 .wb-eyebrow,.wb-section-title>div>span,.wb-kicker{display:block;margin:0 0 5px;color:#7b8797;font-size:9px;font-weight:750;letter-spacing:1px}
 .wb-header h1{margin:0;font-size:23px;letter-spacing:-.5px}
@@ -1018,6 +1146,10 @@ function sizeLabel(size: number) {
 .wb-editor-mode,.wb-rule-editor>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .wb-rule-editor{display:grid;gap:8px;padding:12px 0;border-top:1px solid #e0e6ee;overflow-wrap:anywhere}
 .wb-rule-editor small{color:#68788a}.wb-rule-editor label:not(.wb-label){display:flex;align-items:center;gap:6px}
+.wb-verification-step{display:grid;grid-template-columns:100px minmax(180px,1fr) minmax(130px,1fr) 92px;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #e5eaf0}
+.wb-verification-step label{display:grid!important;gap:5px}.wb-verification-step label:last-child{display:flex!important;grid-column:1/-1}
+.wb-verification-step label:has(textarea){grid-column:span 2}.wb-verification-step textarea{min-width:0}
+@media(max-width:1050px){.wb-verification-step{grid-template-columns:1fr 1fr}.wb-verification-step label:has(textarea){grid-column:span 1}}
 .wb-saved-drafts{display:grid;gap:7px;margin-top:12px}
 .wb-saved-draft-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}
 .wb-saved-draft-row>span{flex:1 1 160px;overflow-wrap:anywhere}

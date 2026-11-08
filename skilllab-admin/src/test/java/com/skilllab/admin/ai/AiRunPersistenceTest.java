@@ -19,6 +19,7 @@ import org.springframework.test.context.TestPropertySource;
 class AiRunPersistenceTest {
     @Autowired AiSimulatorVersionRepository versions;
     @Autowired AiRunRepository runs;
+    @Autowired AiValidationRepository validations;
 
     @Test
     void persistsCandidateAndOwnerScopedLease() {
@@ -30,6 +31,23 @@ class AiRunPersistenceTest {
         assertEquals("creator", runs.findById(run.getId()).get().getOwnerId());
         runs.delete(run);
         versions.delete(version);
+    }
+
+    @Test
+    void persistsReportAndEnabledVersionBinding() {
+        AiSimulatorVersionEntity version = versions.save(new AiSimulatorVersionEntity(
+                "v-validation", "d-validation", "p-validation", "creator", "CANDIDATE", hash('a'), hash('b')));
+        AiValidationEntity report = validations.save(new AiValidationEntity("report-persistence", version.getId(),
+                "p-validation", "creator", hash('a'), hash('b'), hash('c'), "PASSED",
+                "{\"status\":\"PASSED\",\"blockers\":[],\"warnings\":[]}"));
+        version.enable(report.getId(), hash('c'));
+        versions.saveAndFlush(version);
+        AiSimulatorVersionEntity saved = versions.findById(version.getId()).get();
+        assertEquals(report.getId(), saved.getValidationReportId());
+        assertEquals(hash('c'), saved.getRuntimeSha256());
+        assertEquals("PASSED", validations.findById(report.getId()).get().getStatus());
+        validations.delete(report);
+        versions.delete(saved);
     }
 
     private String hash(char value) { char[] chars = new char[64]; java.util.Arrays.fill(chars, value); return new String(chars); }

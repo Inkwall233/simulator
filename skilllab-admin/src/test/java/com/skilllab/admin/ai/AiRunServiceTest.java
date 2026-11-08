@@ -36,8 +36,10 @@ class AiRunServiceTest {
         AiSimulatorDraftRepository drafts = mock(AiSimulatorDraftRepository.class);
         AiPreviewService previews = mock(AiPreviewService.class);
         AiWorkerClient worker = mock(AiWorkerClient.class);
-        when(versions.findById("v1")).thenReturn(Optional.of(
-                new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "ENABLED")));
+        AiSimulatorVersionEntity version = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE");
+        version.enable("report", "runtime");
+        when(versions.findById("v1")).thenReturn(Optional.of(version));
+        when(worker.getJson("/internal/validator-runtime")).thenReturn(java.util.Collections.singletonMap("runtimeHash", "runtime"));
         AiSimulatorDraftEntity draft = mock(AiSimulatorDraftEntity.class);
         when(drafts.findById("draft")).thenReturn(Optional.of(draft));
         when(draft.getPayloadJson()).thenReturn("{\"packageVersion\":{\"id\":\"pkg\"}}");
@@ -58,12 +60,13 @@ class AiRunServiceTest {
         AiPackageRepository packages = mock(AiPackageRepository.class);
         AiPreviewService previews = mock(AiPreviewService.class);
         AiWorkerClient worker = mock(AiWorkerClient.class);
+        when(worker.getJson("/internal/validator-runtime")).thenReturn(java.util.Collections.singletonMap("runtimeHash", "runtime"));
         AiSimulatorVersionEntity candidate = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE");
         when(versions.findById("v1")).thenReturn(Optional.of(candidate));
         AiRunService service = new AiRunService(versions, runs, worker, drafts, packages, previews, new ObjectMapper(), "http://{runId}.localhost:3001", 30000, 600000, 28800000);
         assertThrows(IllegalStateException.class, () -> service.startRun("v1", "maker"));
         verify(runs, never()).save(any(AiRunEntity.class));
-        candidate.enable();
+        candidate.enable("report", "runtime");
         AiSimulatorDraftEntity draft = Mockito.mock(AiSimulatorDraftEntity.class);
         when(drafts.findById("draft")).thenReturn(Optional.of(draft));
         when(draft.getPayloadJson()).thenReturn("{\"packageVersion\":{\"id\":\"pkg\"}}");

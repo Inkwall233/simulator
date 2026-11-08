@@ -89,4 +89,44 @@ describe('simulator authoring views', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/simulator-drafts/v2') && init?.method === 'POST')).toBe(false)
     wrapper.unmount()
   })
+
+  it('requires a passing report and explicit warning acknowledgement before enabling', async () => {
+    const version = { versionId: 'version', draftId: 'draft', projectId: 'project', status: 'CANDIDATE', packageSha256: 'a', behaviorSha256: 'b' }
+    let blocked = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const data = url.endsWith('/auth/me') ? { userId: 'maker' }
+        : url.endsWith('/device-projects') ? [project]
+        : url.endsWith('/device-projects/project') ? project
+        : url.endsWith('/device-projects/project/simulator-drafts') ? [draft]
+        : url.endsWith('/device-projects/project/simulator-drafts/draft') ? { ...draft, payload: behavior }
+        : url.endsWith('/candidate') ? version
+        : url.endsWith('/validate') ? { reportId: blocked ? 'blocked' : 'passed', versionId: 'version', status: blocked ? 'BLOCKED' : 'PASSED',
+          runtimeVersion: 'v2', blockers: blocked ? [{ code: 'FAILED', message: '断言失败' }] : [],
+          warnings: blocked ? [] : [{ code: 'RISK', message: '推断风险' }], cases: [], pageErrors: [], externalRequests: [] }
+        : []
+      return { ok: true, status: 200, json: async () => data } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(AiWorkbenchView)
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '查看修订')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.wb-views button')[3].trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '登记候选版本')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.wb-views button')[3].trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '运行工程验证')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('断言失败')
+    expect(wrapper.findAll('button').some(button => button.text() === '启用已验证版本')).toBe(false)
+    blocked = false
+    await wrapper.findAll('button').find(button => button.text() === '运行工程验证')!.trigger('click')
+    await flushPromises()
+    const enable = wrapper.findAll('button').find(button => button.text() === '启用已验证版本')!
+    expect(enable.attributes('disabled')).toBeDefined()
+    await wrapper.find('.wb-risk-confirm input').setValue(true)
+    expect(enable.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
 })

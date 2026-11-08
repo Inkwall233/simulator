@@ -69,7 +69,8 @@ public class AiRunService {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("versionId", version.getId()); result.put("draftId", draftId); result.put("projectId", projectId);
         result.put("status", version.getStatus()); result.put("packageSha256", version.getPackageSha256());
-        result.put("behaviorSha256", version.getBehaviorSha256()); return result;
+        result.put("behaviorSha256", version.getBehaviorSha256()); result.put("validationReportId", version.getValidationReportId());
+        result.put("runtimeSha256", version.getRuntimeSha256()); return result;
     }
 
     @Transactional(readOnly = true)
@@ -81,17 +82,8 @@ public class AiRunService {
         Map<String, Object> result = new LinkedHashMap<String, Object>(); result.put("versionId", versionId);
         result.put("draftId", version.getDraftId()); result.put("projectId", projectId); result.put("status", version.getStatus());
         result.put("packageSha256", version.getPackageSha256()); result.put("behaviorSha256", version.getBehaviorSha256());
+        result.put("validationReportId", version.getValidationReportId()); result.put("runtimeSha256", version.getRuntimeSha256());
         return result;
-    }
-
-    @Transactional
-    public Map<String, Object> enableVersion(String versionId, String creatorId) {
-        AiSimulatorVersionEntity version = versions.findById(versionId)
-                .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Simulator version not found"));
-        if (!creatorId.equals(version.getCreatorId())) throw new SecurityException("Version belongs to another creator");
-        version.enable(); versions.save(version);
-        Map<String, Object> result = new LinkedHashMap<String, Object>(); result.put("versionId", versionId);
-        result.put("status", version.getStatus()); return result;
     }
 
     @Transactional
@@ -110,6 +102,9 @@ public class AiRunService {
                 .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Simulator version not found"));
         if (!principal.equals(version.getCreatorId())) throw new SecurityException("Version belongs to another creator");
         if (!"ENABLED".equals(version.getStatus())) throw new IllegalStateException("Only enabled versions can start normally");
+        if (version.getRuntimeSha256() == null || !version.getRuntimeSha256().equals(
+                worker.getJson("/internal/validator-runtime").get("runtimeHash")))
+            throw new IllegalStateException("Validated runtime has changed");
         Instant now = Instant.now();
         String runId = UUID.randomUUID().toString().replace("-", "");
         Instant expiry = now.plusMillis(Math.min(idleMs, maximumMs));

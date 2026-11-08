@@ -7,6 +7,7 @@ import { chromium } from 'playwright'
 import { selectEvidence } from './capture-evidence.js'
 import { validateBehaviorV2 } from './behavior-contract.js'
 import { createRunRegistry } from './runtime-host.js'
+import { validateSimulator, validateBrowserReplay, validatorRuntimeVersion, validatorRuntimeHash } from './simulator-validator.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -323,6 +324,22 @@ app.post('/internal/previews/:id/close', (request, response) => {
   }
   closePreview(previewId)
   response.json({ closed: true })
+})
+
+app.post('/internal/previews/:id/validate', async (request, response) => {
+  const preview = previews.get(request.params.id)
+  if (!preview || preview.draft.schemaVersion !== 'skilllab.simulator-behavior.v2') {
+    response.status(404).json({ error: 'V2 preview not found' }); return
+  }
+  try {
+    const preflight = validateSimulator({ behavior: preview.draft })
+    const report = await validateBrowserReplay(preview, await getBrowser(), preflight)
+    response.json(report)
+  } catch (error) { response.status(400).json({ error: publicError(error) }) }
+})
+
+app.get('/internal/validator-runtime', (_request, response) => {
+  response.json({ runtimeVersion: validatorRuntimeVersion, runtimeHash: validatorRuntimeHash })
 })
 
 app.post('/internal/runs', async (request, response) => {

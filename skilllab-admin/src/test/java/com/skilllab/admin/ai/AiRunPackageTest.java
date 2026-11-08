@@ -24,8 +24,11 @@ class AiRunPackageTest {
             output.closeEntry();
         }
         AiPackageRepository packages = mock(AiPackageRepository.class);
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(archive));
+        StringBuilder hash = new StringBuilder();
+        for (byte item : digest) hash.append(String.format("%02x", item & 0xff));
         when(packages.findById("package")).thenReturn(Optional.of(new AiPackageEntity(
-                "package", "project", "device.zip", "a", Files.size(archive), archive.toString())));
+                "package", "project", "device.zip", hash.toString(), Files.size(archive), archive.toString())));
         AiPreviewService previews = new AiPreviewService(mock(AiSimulatorDraftService.class), packages,
                 mock(AiWorkerClient.class), packageRoot.toString(), 900);
         String runId = "aabbccddaabbccddaabbccddaabbccdd";
@@ -34,5 +37,19 @@ class AiRunPackageTest {
         previews.deleteRunPackage(runId);
         assertTrue(Files.isRegularFile(archive));
         assertFalse(Files.exists(extracted));
+    }
+
+    @Test
+    void rejectsArchiveModifiedAfterUpload() throws Exception {
+        Path packageRoot = Files.createDirectory(root.resolve("packages"));
+        Path archive = packageRoot.resolve("device.zip");
+        Files.write(archive, "changed".getBytes("UTF-8"));
+        AiPackageRepository packages = mock(AiPackageRepository.class);
+        when(packages.findById("package")).thenReturn(Optional.of(new AiPackageEntity(
+                "package", "project", "device.zip", "0", Files.size(archive), archive.toString())));
+        AiPreviewService previews = new AiPreviewService(mock(AiSimulatorDraftService.class), packages,
+                mock(AiWorkerClient.class), packageRoot.toString(), 900);
+        assertThrows(IllegalStateException.class, () -> previews.createRunPackage(
+                "aabbccddaabbccddaabbccddaabbccdd", "package"));
     }
 }
