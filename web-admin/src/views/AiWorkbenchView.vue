@@ -6,6 +6,10 @@ import {
   loginCreator,
   logoutCreator,
   getSimulatorDraft,
+  createBehaviorRevision,
+  importLegacyDraft,
+  registerCandidate,
+  getSimulatorVersion,
   fetchScreenshot,
   uploadPackage,
   type BrowserSession,
@@ -15,6 +19,7 @@ import {
   type PendingApproval,
   type SimulatorDraft,
   type SimulatorPreview,
+  type SimulatorVersion,
   createSimulatorDraft as createSimulatorDraftRequest
 } from '@/api/ai-workbench'
 
@@ -47,6 +52,143 @@ const editingApiDraftId = ref('')
 const simulatorGoal = ref('')
 const proposingBehavior = ref(false)
 const behaviorNotes = ref<string[]>([])
+const pendingProposal = ref<{ rules: unknown[]; stateModel: Record<string, unknown>; notes: string[] } | null>(null)
+const proposalChanges = computed(() => {
+  if (!pendingProposal.value) return []
+  const current = apiDraft.value?.mockRules
+  const original = new Map((Array.isArray(current) ? current : []).map((rule: Record<string, unknown>) => [rule.id, rule]))
+  return pendingProposal.value.rules.map((rule) => {
+    const proposed = rule as Record<string, unknown>
+    const before = original.get(proposed.id) as Record<string, unknown> | undefined
+    return { id: String(proposed.id || ''), kind: before ? '修改' : '新增',
+      match: proposed.match, source: proposed.source,
+      changed: before ? Object.keys(proposed).filter(key => JSON.stringify(proposed[key]) !== JSON.stringify(before[key])) : Object.keys(proposed) }
+  })
+})
+type WorkbenchView = 'package' | 'capture' | 'behavior' | 'validation' | 'version'
+const activeView = ref<WorkbenchView>('package')
+const workbenchViews: Array<{ id: WorkbenchView; label: string }> = [
+  { id: 'package', label: '设备包' }, { id: 'capture', label: '真实采集' },
+  { id: 'behavior', label: '行为制作' }, { id: 'validation', label: '验证' },
+  { id: 'version', label: '版本' }
+]
+const selectedDraftId = ref('')
+const selectedDraft = computed(() => simulatorDraft.value?.id === selectedDraftId.value
+  ? simulatorDraft.value : simulatorDrafts.value.find(item => item.id === selectedDraftId.value) || null)
+const behaviorRevisionJson = ref('')
+const advancedBehavior = ref(false)
+const parsedBehavior = computed(() => {
+  try { return JSON.parse(behaviorRevisionJson.value) as Record<string, unknown> }
+  catch { return null }
+})
+const behaviorRules = computed(() => Array.isArray(parsedBehavior.value?.rules)
+  ? parsedBehavior.value.rules as Array<Record<string, unknown>> : [])
+const behaviorScope = computed(() => parsedBehavior.value?.scope as Record<string, unknown> | undefined)
+function updateBehavior(change: (model: Record<string, unknown>) => void) {
+  if (!parsedBehavior.value) return
+  const next = structuredClone(parsedBehavior.value)
+  change(next)
+  behaviorRevisionJson.value = JSON.stringify(next, null, 2)
+}
+function updateScopeName(value: string) {
+  updateBehavior(model => { (model.scope as Record<string, unknown>).name = value })
+}
+function updateCriticalRule(id: string, checked: boolean) {
+  updateBehavior(model => {
+    const scope = model.scope as Record<string, unknown>
+    const ids = new Set(scope.criticalRuleIds as string[])
+    if (checked) ids.add(id)
+    else ids.delete(id)
+    scope.criticalRuleIds = [...ids]
+  })
+}
+function updateInitialState(value: string) {
+  try { updateBehavior(model => { model.initialState = JSON.parse(value) as Record<string, unknown> }) }
+  catch { showError('初始状态必须是有效 JSON') }
+}
+const revisionSourceId = ref('')
+const savingRevision = ref(false)
+const candidate = ref<SimulatorVersion | null>(null)
+const candidateBusy = ref(false)
+
+async function selectDraft(draft: SimulatorDraft) {
+  const projectId = selectedProjectId.value
+  try {
+    const full = draft.payload ? draft : await getSimulatorDraft(projectId, draft.id)
+    if (projectId !== selectedProjectId.value) return
+    selectedDraftId.value = full.id
+    simulatorDraft.value = full
+    behaviorRevisionJson.value = ''
+    revisionSourceId.value = ''
+    if (full.payload?.schemaVersion === 'skilllab.simulator-behavior.v2') {
+      behaviorRevisionJson.value = JSON.stringify(full.payload, null, 2)
+      advancedBehavior.value = false
+      revisionSourceId.value = full.sourceApiDraftId
+    }
+    activeView.value = 'behavior'
+  } catch (reason) { showError((reason as Error).message) }
+}
+
+async function importDraft(draft: SimulatorDraft) {
+  const projectId = selectedProjectId.value
+  savingRevision.value = true
+  try {
+    const created = await importLegacyDraft(projectId, draft.id)
+    if (projectId !== selectedProjectId.value) return
+    simulatorDrafts.value.unshift(created)
+    await selectDraft(created)
+    addEvent('已导入 v2 行为修订；所有规则仍标记为待核实推断', 'warning')
+  } catch (reason) { showError((reason as Error).message) }
+  finally { savingRevision.value = false }
+}
+
+function editAsNewRevision() {
+  const draft = selectedDraft.value
+  if (!draft?.payload || draft.payload.schemaVersion !== 'skilllab.simulator-behavior.v2') return
+  behaviorRevisionJson.value = JSON.stringify(draft.payload, null, 2)
+  advancedBehavior.value = false
+  revisionSourceId.value = draft.sourceApiDraftId
+  candidate.value = null
+}
+
+async function confirmRevision() {
+  const projectId = selectedProjectId.value
+  if (!revisionSourceId.value || !behaviorRevisionJson.value) return
+  savingRevision.value = true
+  try {
+    const behavior = JSON.parse(behaviorRevisionJson.value) as Record<string, unknown>
+    if (behavior.schemaVersion !== 'skilllab.simulator-behavior.v2') throw new Error('仅支持 v2 行为协议')
+    const created = await createBehaviorRevision(projectId, revisionSourceId.value, behavior)
+    if (projectId !== selectedProjectId.value) return
+    simulatorDrafts.value.unshift(created)
+    simulatorDraft.value = created
+    selectedDraftId.value = created.id
+    candidate.value = null
+    addEvent('已确认并保存不可变行为修订 v' + created.versionNumber, 'success')
+    activeView.value = 'validation'
+  } catch (reason) { showError((reason as Error).message) }
+  finally { savingRevision.value = false }
+}
+
+async function makeCandidate() {
+  const draft = selectedDraft.value
+  if (!draft || draft.payload?.schemaVersion !== 'skilllab.simulator-behavior.v2') return
+  const projectId = selectedProjectId.value
+  candidateBusy.value = true
+  try {
+    const result = await registerCandidate(projectId, draft.id)
+    if (projectId !== selectedProjectId.value) return
+    candidate.value = result
+    activeView.value = 'version'
+  } catch (reason) { showError((reason as Error).message) }
+  finally { candidateBusy.value = false }
+}
+
+async function refreshCandidate() {
+  if (!candidate.value) return
+  try { candidate.value = await getSimulatorVersion(selectedProjectId.value, candidate.value.versionId) }
+  catch (reason) { showError((reason as Error).message) }
+}
 
 async function proposeBehavior() {
   if (!session.value || !simulatorGoal.value.trim()) return
@@ -58,11 +200,18 @@ async function proposeBehavior() {
       { method: 'POST', body: JSON.stringify({ goal: simulatorGoal.value }) }
     )
     if (sourceId !== apiDraftId.value || proposal.apiDraftId !== sourceId) throw new Error('采集版本已变化，请重新生成')
-    behaviorJson.value = JSON.stringify({ rules: proposal.rules, stateModel: proposal.stateModel }, null, 2)
-    editingApiDraftId.value = sourceId
-    behaviorNotes.value = Array.isArray(proposal.notes) ? proposal.notes : []
+    pendingProposal.value = { rules: proposal.rules, stateModel: proposal.stateModel,
+      notes: Array.isArray(proposal.notes) ? proposal.notes : [] }
   } catch (reason) { showError((reason as Error).message) }
   finally { proposingBehavior.value = false }
+}
+
+function adoptProposal() {
+  if (!pendingProposal.value || !apiDraftId.value) return
+  behaviorJson.value = JSON.stringify({ rules: pendingProposal.value.rules, stateModel: pendingProposal.value.stateModel }, null, 2)
+  editingApiDraftId.value = apiDraftId.value
+  behaviorNotes.value = pendingProposal.value.notes
+  pendingProposal.value = null
 }
 
 function configureBehavior() {
@@ -89,6 +238,7 @@ const previewEventNames = new Set(['SERVICE_WORKER_READY', 'SERVICE_WORKER_UNAVA
 async function openPreview(draft: SimulatorDraft) {
   const projectId = selectedProjectId.value
   openingPreview.value = true
+  activeView.value = 'validation'
   preview.value = null
   previewEvents.value = []
   try {
@@ -137,8 +287,23 @@ onBeforeUnmount(() => {
 })
 
 watch(selectedProjectId, async (id) => {
+  if (session.value && session.value.projectId !== id) await closeSession(false)
+  activeView.value = 'package'
+  selectedDraftId.value = ''
+  behaviorRevisionJson.value = ''
+  revisionSourceId.value = ''
+  candidate.value = null
+  pendingProposal.value = null
+  apiDraft.value = null
+  apiDraftId.value = ''
+  apiDraftEndpointCount.value = 0
+  behaviorJson.value = ''
+  editingApiDraftId.value = ''
+  behaviorNotes.value = []
   preview.value = null
   previewEvents.value = []
+  network.value = []
+  approvals.value = []
   latestPackage.value = null
   simulatorDraft.value = null
   simulatorDrafts.value = []
@@ -224,6 +389,7 @@ async function uploadPackageFile() {
   try {
     latestPackage.value = await uploadPackage(selectedProjectId.value, selectedFile.value)
     simulatorDraft.value = null
+    activeView.value = 'capture'
     addEvent('已上传并检查 ' + latestPackage.value.filename, 'success')
     selectedFile.value = null
     const input = document.querySelector<HTMLInputElement>('#ai-package-input')
@@ -249,6 +415,7 @@ async function connectDevice() {
       { method: 'POST', body: JSON.stringify({ targetUrl: targetUrl.value.trim() }) }
     )
     addEvent('远程浏览器已连接：' + session.value.targetUrl, 'success')
+    activeView.value = 'capture'
     startPolling()
     await refreshBrowser()
   } catch (reason) {
@@ -384,9 +551,14 @@ async function createApiDraft() {
     apiDraftId.value = result.id
     apiDraft.value = result.payload
     apiDraftEndpointCount.value = result.endpointCount
+    pendingProposal.value = null
     configureBehavior()
     simulatorDraft.value = null
+    selectedDraftId.value = ''
+    behaviorRevisionJson.value = ''
+    revisionSourceId.value = ''
     addEvent('已生成 ' + result.endpointCount + ' 条接口 Mock 草稿，待人工审查', 'success')
+    activeView.value = 'behavior'
   } catch (reason) {
     showError((reason as Error).message)
   } finally {
@@ -409,6 +581,7 @@ async function createSimulatorDraft() {
       ...simulatorDrafts.value.filter((item) => item.id !== simulatorDraft.value?.id)
     ]
     addEvent('已保存 Simulator 草稿 v' + simulatorDraft.value.versionNumber + '，待审核', 'success')
+    selectedDraftId.value = simulatorDraft.value.id
   } catch (reason) {
     showError((reason as Error).message)
   } finally {
@@ -538,9 +711,14 @@ function sizeLabel(size: number) {
 
     <template v-else>
       <div v-if="error" class="wb-error">{{ error }}</div>
+      <nav class="wb-views" aria-label="制作流程">
+        <button v-for="(view, index) in workbenchViews" :key="view.id" type="button"
+          :class="{ active: activeView === view.id }" :aria-current="activeView === view.id ? 'step' : undefined"
+          @click="activeView = view.id"><span>{{ index + 1 }}</span>{{ view.label }}</button>
+      </nav>
       <div class="wb-layout">
         <aside class="wb-left">
-          <section class="wb-card wb-project-card">
+          <section v-show="activeView === 'package' || activeView === 'version'" class="wb-card wb-project-card">
             <div class="wb-section-title">
               <div><span>01 / PROJECT</span><h2>设备项目</h2></div>
               <button class="wb-icon-button" title="刷新" @click="loadProjects">↻</button>
@@ -582,12 +760,14 @@ function sizeLabel(size: number) {
                   <span>v{{ draft.versionNumber }} · {{ draft.status }} · {{ draft.createdAt }}</span>
                   <button class="wb-link-button" @click="downloadSavedSimulatorDraft(draft)">下载</button>
                   <button class="wb-link-button" :disabled="openingPreview" @click="openPreview(draft)">隔离预览</button>
+                  <button class="wb-link-button" @click="selectDraft(draft)">查看修订</button>
+                  <button v-if="draft.payload?.schemaVersion === 'skilllab.simulator-draft.v1'" class="wb-link-button" :disabled="savingRevision" @click="importDraft(draft)">导入 v2</button>
                 </div>
               </div>
             </div>
           </section>
 
-          <section class="wb-card wb-command-card">
+          <section v-show="activeView === 'capture'" class="wb-card wb-command-card">
             <div class="wb-section-title">
               <div><span>02 / ASSISTANT</span><h2>指令与事件</h2></div>
               <span class="wb-live" :class="{ active: session }">{{ session ? 'LIVE' : 'READY' }}</span>
@@ -607,7 +787,7 @@ function sizeLabel(size: number) {
         </aside>
 
         <main class="wb-right">
-          <section v-if="preview" class="wb-preview">
+          <section v-if="preview && activeView === 'validation'" class="wb-preview">
             <div class="wb-device-toolbar">
               <strong>隔离预览 · v{{ preview.versionNumber }}</strong>
               <span>{{ preview.runtimeVersion }} · {{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }} 到期</span>
@@ -617,7 +797,7 @@ function sizeLabel(size: number) {
               sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer" />
             <ol class="wb-preview-events"><li v-for="(item, index) in previewEvents" :key="index">{{ item }}</li></ol>
           </section>
-          <section class="wb-card wb-device-card">
+          <section v-show="activeView === 'capture'" class="wb-card wb-device-card">
             <div class="wb-device-toolbar">
               <div><span class="wb-kicker">03 / LIVE DEVICE</span><strong>真实设备页面</strong></div>
               <form class="wb-target-form" @submit.prevent="session ? navigateToTarget() : connectDevice()">
@@ -656,7 +836,7 @@ function sizeLabel(size: number) {
             </template>
           </section>
 
-          <section v-if="session" class="wb-card wb-network-card">
+          <section v-if="session && (activeView === 'capture' || activeView === 'behavior')" class="wb-card wb-network-card">
             <div class="wb-section-title">
               <div><span>04 / OBSERVED TRAFFIC</span><h2>接口采集</h2></div>
               <div class="wb-draft-actions">
@@ -665,7 +845,7 @@ function sizeLabel(size: number) {
                   {{ creatingDraft ? '生成中…' : '生成 Mock 草稿' }}
                 </button>
                 <button v-if="apiDraft" class="wb-secondary" @click="downloadApiDraft">下载 JSON</button>
-                <button v-if="apiDraft" class="wb-secondary" :disabled="busy || creatingSimulatorDraft || !latestPackage || !apiDraftId" @click="createSimulatorDraft">
+                <button v-if="apiDraft && activeView === 'behavior'" class="wb-secondary" :disabled="busy || creatingSimulatorDraft || !latestPackage || !apiDraftId" @click="createSimulatorDraft">
                   {{ creatingSimulatorDraft ? '保存中…' : '创建 Simulator 草稿' }}
                 </button>
                 <button v-if="simulatorDraft?.payload" class="wb-secondary" @click="downloadSimulatorDraft">下载 Simulator 草稿</button>
@@ -676,10 +856,20 @@ function sizeLabel(size: number) {
               <pre>{{ JSON.stringify(apiDraft, null, 2) }}</pre>
               <p>规则来自观察到的请求样例，不是最终可发布的设备配置；请审查后再接入 Simulator。</p>
             </details>
-            <div v-if="apiDraft && editingApiDraftId === apiDraftId" class="wb-behavior-editor">
+            <div v-if="activeView === 'behavior' && apiDraft && editingApiDraftId === apiDraftId" class="wb-behavior-editor">
               <label class="wb-label" for="simulator-goal">模拟能力范围</label>
               <textarea id="simulator-goal" v-model="simulatorGoal" rows="2" placeholder="例如：设备参数读取、修改与保存；不包含录像播放" />
               <button class="wb-secondary" :disabled="proposingBehavior || !simulatorGoal.trim()" @click="proposeBehavior">{{ proposingBehavior ? '生成中…' : 'AI 制作行为草案' }}</button>
+              <div v-if="pendingProposal" class="wb-proposal-review">
+                <strong>待审查提案 · {{ proposalChanges.length }} 条规则</strong>
+                <div v-for="change in proposalChanges" :key="change.id" class="wb-proposal-row">
+                  <span>{{ change.kind }} · {{ change.id }}</span>
+                  <small>{{ JSON.stringify(change.match) }} · 变化字段：{{ change.changed.join('、') }}</small>
+                  <small>采集来源：{{ JSON.stringify(change.source || '未提供') }}</small>
+                </div>
+                <p v-for="(note, index) in pendingProposal.notes" :key="index">{{ note }}</p>
+                <div class="wb-proposal-actions"><button class="wb-primary" @click="adoptProposal">采用到待确认草稿</button><button class="wb-secondary" @click="pendingProposal = null">取消提案</button></div>
+              </div>
               <ul v-if="behaviorNotes.length"><li v-for="(note, index) in behaviorNotes" :key="index">{{ note }}</li></ul>
               <label class="wb-label" for="simulator-behavior">接口与状态规则 · 待确认</label>
               <textarea id="simulator-behavior" v-model="behaviorJson" rows="16" spellcheck="false" />
@@ -689,7 +879,7 @@ function sizeLabel(size: number) {
               <pre>{{ JSON.stringify(simulatorDraft.payload, null, 2) }}</pre>
               <p>草稿已固定关联静态包和接口采集版本，尚未发布。</p>
             </details>
-            <div v-if="approvals.length" class="wb-approvals">
+            <div v-if="activeView === 'capture' && approvals.length" class="wb-approvals">
               <div v-for="item in approvals" :key="item.id" class="wb-approval">
                 <div><small>需要确认 · 真实设备请求</small><strong>{{ item.method }} {{ item.url }}</strong></div>
                 <div class="wb-approval-actions">
@@ -698,7 +888,7 @@ function sizeLabel(size: number) {
                 </div>
               </div>
             </div>
-            <div class="wb-table-scroll">
+            <div v-if="activeView === 'capture'" class="wb-table-scroll">
               <table class="wb-table">
                 <thead><tr><th>方法</th><th>请求地址</th><th>状态</th><th>类型</th><th>时间</th></tr></thead>
                 <tbody>
@@ -713,7 +903,50 @@ function sizeLabel(size: number) {
                 </tbody>
               </table>
             </div>
-            <p class="wb-footnote">请求正文不保存；写请求与疑似修改配置的 GET 默认暂停。WebSocket 默认阻止；显式放行后消息内容不受逐次审批。</p>
+            <p v-if="activeView === 'capture'" class="wb-footnote">请求正文不保存；写请求与疑似修改配置的 GET 默认暂停。WebSocket 默认阻止；显式放行后消息内容不受逐次审批。</p>
+          </section>
+          <section v-if="activeView === 'behavior'" class="wb-workflow-panel">
+            <div class="wb-section-title"><div><span>BEHAVIOR / V2</span><h2>行为修订</h2></div></div>
+            <p v-if="!selectedDraft && !apiDraft">先在真实采集中生成接口草稿，再保存并导入 v2 行为修订。</p>
+            <template v-if="selectedDraft">
+              <div class="wb-saved-draft-row"><strong>v{{ selectedDraft.versionNumber }}</strong><span>{{ selectedDraft.payload?.schemaVersion || '加载修订后可查看协议' }}</span></div>
+              <button v-if="selectedDraft.payload?.schemaVersion === 'skilllab.simulator-draft.v1'" class="wb-secondary" :disabled="savingRevision" @click="importDraft(selectedDraft)">导入为 v2 待核实修订</button>
+              <button v-else-if="selectedDraft.payload?.schemaVersion === 'skilllab.simulator-behavior.v2'" class="wb-secondary" @click="editAsNewRevision">以此修订新版本</button>
+            </template>
+            <div v-if="behaviorRevisionJson" class="wb-behavior-editor">
+              <div class="wb-editor-mode"><strong>v2 行为模型</strong><button class="wb-secondary" @click="advancedBehavior = !advancedBehavior">{{ advancedBehavior ? '结构化编辑' : '高级 JSON' }}</button></div>
+              <template v-if="!advancedBehavior && parsedBehavior">
+                <label class="wb-label" for="behavior-scope">模拟范围</label>
+                <input id="behavior-scope" class="wb-input" :value="behaviorScope?.name" @change="updateScopeName(($event.target as HTMLInputElement).value)" />
+                <label class="wb-label" for="behavior-initial">初始状态 JSON</label>
+                <textarea id="behavior-initial" :key="behaviorRevisionJson" rows="5" :value="JSON.stringify(parsedBehavior.initialState, null, 2)" @change="updateInitialState(($event.target as HTMLTextAreaElement).value)" />
+                <div v-for="(rule, index) in behaviorRules" :key="String(rule.id)" class="wb-rule-editor">
+                  <div><strong>{{ rule.id }}</strong><span>{{ (rule.match as Record<string, unknown>)?.method }} {{ (rule.match as Record<string, unknown>)?.path }}</span></div>
+                  <label><input type="checkbox" :checked="(behaviorScope?.criticalRuleIds as string[] || []).includes(String(rule.id))" @change="updateCriticalRule(String(rule.id), ($event.target as HTMLInputElement).checked)" /> 关键接口</label>
+                  <small>证据：{{ JSON.stringify(rule.evidence || {}) }}</small>
+                  <label class="wb-label" :for="'rule-evidence-'+index">证据说明 / 推断依据</label>
+                  <input :id="'rule-evidence-'+index" class="wb-input" :value="(rule.evidence as Record<string, unknown>)?.note" @change="updateBehavior(model => { ((model.rules as Array<Record<string, unknown>>)[index].evidence as Record<string, unknown>).note = ($event.target as HTMLInputElement).value })" />
+                </div>
+              </template>
+              <template v-else><label class="wb-label" for="behavior-v2-json">高级 JSON</label><textarea id="behavior-v2-json" v-model="behaviorRevisionJson" rows="20" spellcheck="false" /></template>
+              <button class="wb-primary" :disabled="savingRevision || !revisionSourceId" @click="confirmRevision">{{ savingRevision ? '保存中…' : '人工确认并保存新修订' }}</button>
+            </div>
+          </section>
+          <section v-if="activeView === 'validation'" class="wb-workflow-panel">
+            <div class="wb-section-title"><div><span>VALIDATION</span><h2>隔离验证</h2></div></div>
+            <p>选择已保存的 v2 修订，在隔离预览中检查设备页面、接口命中与状态读回。</p>
+            <div v-for="draft in simulatorDrafts" :key="draft.id" class="wb-saved-draft-row">
+              <span>v{{ draft.versionNumber }} · {{ draft.status }}</span>
+              <button class="wb-secondary" :disabled="openingPreview" @click="openPreview(draft)">隔离预览</button>
+              <button class="wb-secondary" @click="selectDraft(draft)">查看修订</button>
+            </div>
+            <button v-if="selectedDraft?.payload?.schemaVersion === 'skilllab.simulator-behavior.v2'" class="wb-primary" :disabled="candidateBusy" @click="makeCandidate">登记候选版本</button>
+            <p>自动验证报告和启用门禁尚未接入；候选版本不能通过普通入口运行。</p>
+          </section>
+          <section v-if="activeView === 'version'" class="wb-workflow-panel">
+            <div class="wb-section-title"><div><span>VERSION</span><h2>版本状态</h2></div><button v-if="candidate" class="wb-secondary" @click="refreshCandidate">刷新</button></div>
+            <template v-if="candidate"><p>版本 {{ candidate.versionId }} · {{ candidate.status }}</p><p>包 SHA-256 {{ candidate.packageSha256 }}</p><p>行为 SHA-256 {{ candidate.behaviorSha256 }}</p></template>
+            <p v-else>尚未登记候选版本。选择 v2 行为修订并完成隔离预览后登记。</p>
           </section>
         </main>
       </div>
@@ -723,6 +956,13 @@ function sizeLabel(size: number) {
 
 <style scoped>
 .ai-workbench{min-height:100%;padding:25px 28px 34px;background:#f2f4f7;color:#192435}
+.wb-views{display:flex;gap:0;overflow-x:auto;margin-bottom:16px;border-bottom:1px solid #dce3eb}
+.wb-views button{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:11px 16px;border:0;border-bottom:2px solid transparent;background:transparent;color:#637286;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.wb-views button.active{border-bottom-color:#315ec6;color:#234da9}
+.wb-views button span{display:grid;width:19px;height:19px;place-items:center;border-radius:50%;background:#e2e8ef;font-size:10px}
+.wb-views button.active span{background:#315ec6;color:#fff}
+.wb-workflow-panel{min-width:0;padding:18px 0;border-top:1px solid #dce3eb;color:#4c5b6e;font-size:12px;overflow-wrap:anywhere}
+.wb-workflow-panel p{line-height:1.6}.wb-workflow-panel .wb-saved-draft-row{padding:10px 0;border-bottom:1px solid #e4e9ef}
 .wb-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:19px}
 .wb-eyebrow,.wb-section-title>div>span,.wb-kicker{display:block;margin:0 0 5px;color:#7b8797;font-size:9px;font-weight:750;letter-spacing:1px}
 .wb-header h1{margin:0;font-size:23px;letter-spacing:-.5px}
@@ -772,6 +1012,12 @@ function sizeLabel(size: number) {
 .wb-behavior-editor{display:grid;gap:8px;margin:12px 0;font-size:12px}
 .wb-behavior-editor textarea{width:100%;box-sizing:border-box;resize:vertical;min-width:0;font:12px/1.5 ui-monospace,monospace}
 .wb-behavior-editor button{justify-self:start}
+.wb-proposal-review{display:grid;gap:8px;padding:12px;border:1px solid #d7e1ec;border-radius:6px;background:#f8fafc;overflow-wrap:anywhere}
+.wb-proposal-row{display:grid;gap:3px;padding:7px 0;border-top:1px solid #e3e9ef}
+.wb-proposal-row small{color:#657387}.wb-proposal-actions{display:flex;flex-wrap:wrap;gap:7px}
+.wb-editor-mode,.wb-rule-editor>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.wb-rule-editor{display:grid;gap:8px;padding:12px 0;border-top:1px solid #e0e6ee;overflow-wrap:anywhere}
+.wb-rule-editor small{color:#68788a}.wb-rule-editor label:not(.wb-label){display:flex;align-items:center;gap:6px}
 .wb-saved-drafts{display:grid;gap:7px;margin-top:12px}
 .wb-saved-draft-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}
 .wb-saved-draft-row>span{flex:1 1 160px;overflow-wrap:anywhere}
@@ -821,5 +1067,5 @@ function sizeLabel(size: number) {
 .wb-key-form{display:flex;gap:7px;margin-top:15px}.wb-key-form input{flex:1}
 .wb-error{margin:11px 0;padding:9px 11px;border:1px solid #f0d0d0;border-radius:7px;background:#fff5f5;color:#a54040;font-size:10px}
 @media(max-width:1050px){.ai-workbench{padding:18px 15px}.wb-layout{grid-template-columns:1fr}.wb-left{display:grid;grid-template-columns:1fr 1fr;align-items:start}}
-@media(max-width:700px){.wb-header{align-items:flex-start;gap:8px}.wb-header h1{font-size:19px}.wb-left{display:flex}.wb-device-toolbar{align-items:flex-start;flex-direction:column}.wb-target-form{width:100%;max-width:none}.wb-stage img{max-height:60vh}.wb-approval{align-items:flex-start;flex-direction:column}.wb-table th:nth-child(4),.wb-table td:nth-child(4){display:none}}
+@media(max-width:700px){.wb-header{align-items:flex-start;gap:8px}.wb-header h1{font-size:19px}.wb-left{display:flex}.wb-device-toolbar{align-items:flex-start;flex-direction:column}.wb-target-form{width:100%;max-width:none}.wb-stage img{max-height:60vh}.wb-approval{align-items:flex-start;flex-direction:column}.wb-table th:nth-child(4),.wb-table td:nth-child(4){display:none}.wb-views button{padding:10px}.wb-layout{gap:8px}.wb-key-form{flex-direction:column}}
 </style>

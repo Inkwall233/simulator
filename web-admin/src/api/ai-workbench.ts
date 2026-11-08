@@ -71,6 +71,33 @@ export interface SimulatorPreview {
   runtimeVersion: string
 }
 
+export interface SimulatorVersion {
+  versionId: string
+  draftId: string
+  projectId: string
+  status: 'CANDIDATE' | 'ENABLED' | 'DISABLED'
+  packageSha256: string
+  behaviorSha256: string
+}
+
+export function createBehaviorRevision(projectId: string, sourceApiDraftId: string, behavior: Record<string, unknown>): Promise<SimulatorDraft> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-drafts/v2', {
+    method: 'POST', body: JSON.stringify({ sourceApiDraftId, behavior })
+  })
+}
+
+export function importLegacyDraft(projectId: string, draftId: string): Promise<SimulatorDraft> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-drafts/' + draftId + '/import-v1', { method: 'POST' })
+}
+
+export function registerCandidate(projectId: string, draftId: string): Promise<SimulatorVersion> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-drafts/' + draftId + '/candidate', { method: 'POST' })
+}
+
+export function getSimulatorVersion(projectId: string, versionId: string): Promise<SimulatorVersion> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId)
+}
+
 export async function loginCreator(username: string, password: string): Promise<{ userId: string }> {
   const response = await fetch('/api/ai/auth/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
