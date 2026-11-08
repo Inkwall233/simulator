@@ -9,6 +9,7 @@
     window.parent.postMessage({
       type: 'SKILLLAB_PREVIEW_EVENT',
       previewId: config.previewId,
+      schemaVersion: config.schemaVersion,
       event,
       detail: detail || {},
       timestamp: new Date().toISOString()

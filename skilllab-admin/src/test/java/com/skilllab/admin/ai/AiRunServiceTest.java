@@ -36,12 +36,13 @@ class AiRunServiceTest {
         AiSimulatorDraftRepository drafts = mock(AiSimulatorDraftRepository.class);
         AiPreviewService previews = mock(AiPreviewService.class);
         AiWorkerClient worker = mock(AiWorkerClient.class);
-        AiSimulatorVersionEntity version = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE");
+        AiSimulatorVersionEntity version = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE", "", digest("{\"packageVersion\":{\"id\":\"pkg\"}}"));
         version.enable("report", "runtime");
         when(versions.findById("v1")).thenReturn(Optional.of(version));
         when(worker.getJson("/internal/validator-runtime")).thenReturn(java.util.Collections.singletonMap("runtimeHash", "runtime"));
         AiSimulatorDraftEntity draft = mock(AiSimulatorDraftEntity.class);
         when(drafts.findById("draft")).thenReturn(Optional.of(draft));
+        when(draft.getProjectId()).thenReturn("project");
         when(draft.getPayloadJson()).thenReturn("{\"packageVersion\":{\"id\":\"pkg\"}}");
         when(previews.createRunPackage(anyString(), eq("pkg"))).thenReturn(java.nio.file.Paths.get("/tmp/run"));
         when(runs.save(any(AiRunEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -61,7 +62,7 @@ class AiRunServiceTest {
         AiPreviewService previews = mock(AiPreviewService.class);
         AiWorkerClient worker = mock(AiWorkerClient.class);
         when(worker.getJson("/internal/validator-runtime")).thenReturn(java.util.Collections.singletonMap("runtimeHash", "runtime"));
-        AiSimulatorVersionEntity candidate = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE");
+        AiSimulatorVersionEntity candidate = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE", "", digest("{\"packageVersion\":{\"id\":\"pkg\"}}"));
         when(versions.findById("v1")).thenReturn(Optional.of(candidate));
         AiRunService service = new AiRunService(versions, runs, worker, drafts, packages, previews, new ObjectMapper(), "http://{runId}.localhost:3001", 30000, 600000, 28800000);
         assertThrows(IllegalStateException.class, () -> service.startRun("v1", "maker"));
@@ -69,6 +70,7 @@ class AiRunServiceTest {
         candidate.enable("report", "runtime");
         AiSimulatorDraftEntity draft = Mockito.mock(AiSimulatorDraftEntity.class);
         when(drafts.findById("draft")).thenReturn(Optional.of(draft));
+        when(draft.getProjectId()).thenReturn("project");
         when(draft.getPayloadJson()).thenReturn("{\"packageVersion\":{\"id\":\"pkg\"}}");
         when(previews.createRunPackage(anyString(), eq("pkg"))).thenReturn(java.nio.file.Paths.get("/tmp/run"));
         java.util.Map<String, AiRunEntity> savedRuns = new java.util.HashMap<String, AiRunEntity>();
@@ -83,6 +85,44 @@ class AiRunServiceTest {
         assertThrows(SecurityException.class, () -> service.heartbeat(runId, "other", Instant.now()));
         assertThrows(SecurityException.class, () -> service.endRun(runId, "other"));
         assertDoesNotThrow(() -> service.endRun(runId, "maker"));
+    }
+
+    @Test
+    void changedDraftCannotStartValidatedVersion() {
+        AiSimulatorVersionRepository versions = mock(AiSimulatorVersionRepository.class);
+        AiSimulatorDraftRepository drafts = mock(AiSimulatorDraftRepository.class);
+        AiPreviewService previews = mock(AiPreviewService.class);
+        AiWorkerClient worker = mock(AiWorkerClient.class);
+        AiSimulatorVersionEntity version = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "CANDIDATE", "", digest("original"));
+        version.enable("report", "runtime");
+        when(versions.findById("v1")).thenReturn(Optional.of(version));
+        when(worker.getJson("/internal/validator-runtime")).thenReturn(java.util.Collections.singletonMap("runtimeHash", "runtime"));
+        AiSimulatorDraftEntity draft = mock(AiSimulatorDraftEntity.class);
+        when(drafts.findById("draft")).thenReturn(Optional.of(draft));
+        when(draft.getProjectId()).thenReturn("project");
+        when(draft.getPayloadJson()).thenReturn("changed");
+        AiRunService service = new AiRunService(versions, mock(AiRunRepository.class), worker, drafts,
+                mock(AiPackageRepository.class), previews, new ObjectMapper(), "http://{runId}.localhost:3001", 30000, 600000, 28800000);
+        assertThrows(IllegalStateException.class, () -> service.startRun("v1", "maker"));
+        verify(previews, never()).createRunPackage(anyString(), anyString());
+    }
+
+    @Test
+    void restoreRequiresMatchingWorkerRegistration() {
+        AiSimulatorVersionRepository versions = mock(AiSimulatorVersionRepository.class);
+        AiRunRepository runs = mock(AiRunRepository.class);
+        AiWorkerClient worker = mock(AiWorkerClient.class);
+        AiSimulatorVersionEntity version = new AiSimulatorVersionEntity("v1", "draft", "project", "maker", "ENABLED");
+        AiRunEntity run = new AiRunEntity("run", "v1", "project", "maker", Instant.now(),
+                Instant.now().plusSeconds(100), Instant.now().plusSeconds(200));
+        when(runs.findById("run")).thenReturn(Optional.of(run));
+        when(versions.findById("v1")).thenReturn(Optional.of(version));
+        when(worker.getRun("run.localhost:3001", "run"))
+                .thenReturn(java.util.Collections.singletonMap("runId", "different"));
+        AiRunService service = new AiRunService(versions, runs, worker, mock(AiSimulatorDraftRepository.class),
+                mock(AiPackageRepository.class), mock(AiPreviewService.class), new ObjectMapper(),
+                "http://{runId}.localhost:3001", 30000, 600000, 28800000);
+        assertThrows(IllegalStateException.class, () -> service.getRun("run", "maker"));
     }
 
     @Test
@@ -101,5 +141,14 @@ class AiRunServiceTest {
         assertThrows(SecurityException.class, () -> service.heartbeat("run", "maker", Instant.now()));
         enabled.disable();
         assertThrows(IllegalStateException.class, () -> service.startRun("v1", "maker"));
+    }
+
+    private String digest(String value) {
+        try {
+            byte[] bytes = java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes("UTF-8"));
+            StringBuilder result = new StringBuilder();
+            for (byte item : bytes) result.append(String.format("%02x", item & 0xff));
+            return result.toString();
+        } catch (Exception exception) { throw new IllegalStateException(exception); }
     }
 }

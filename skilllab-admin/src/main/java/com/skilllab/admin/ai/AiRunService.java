@@ -105,6 +105,11 @@ public class AiRunService {
         if (version.getRuntimeSha256() == null || !version.getRuntimeSha256().equals(
                 worker.getJson("/internal/validator-runtime").get("runtimeHash")))
             throw new IllegalStateException("Validated runtime has changed");
+        AiSimulatorDraftEntity source = drafts.findById(version.getDraftId())
+                .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Simulator draft not found"));
+        if (!version.getProjectId().equals(source.getProjectId())
+                || !version.getBehaviorSha256().equals(hashPayload(source.getPayloadJson())))
+            throw new IllegalStateException("Validated behavior has changed");
         Instant now = Instant.now();
         String runId = UUID.randomUUID().toString().replace("-", "");
         Instant expiry = now.plusMillis(Math.min(idleMs, maximumMs));
@@ -137,6 +142,17 @@ public class AiRunService {
         run.renew(expiry); runs.save(run);
         Map<String, Object> result = new LinkedHashMap<String, Object>(); result.put("expiresAt", expiry.toString());
         result.put("heartbeatMs", heartbeatMs); return result;
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getRun(String runId, String principal) {
+        AiRunEntity run = ownedActiveRun(runId, principal, Instant.now());
+        AiSimulatorVersionEntity version = versions.findById(run.getVersionId())
+                .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Simulator version not found"));
+        Map<String, Object> registration = worker.getRun(runHost(runId), runId);
+        if (!runId.equals(registration.get("runId")) || !version.getId().equals(registration.get("versionId")))
+            throw new IllegalStateException("Run registration no longer matches the lease");
+        return runView(run, version);
     }
 
     @Transactional
@@ -174,5 +190,9 @@ public class AiRunService {
         byte[] bytes = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
         StringBuilder result = new StringBuilder(); for (byte item : bytes) result.append(String.format("%02x", item & 0xff));
         return result.toString();
+    }
+    private String hashPayload(String value) {
+        try { return sha256(value); }
+        catch (NoSuchAlgorithmException exception) { throw new IllegalStateException("SHA-256 is unavailable", exception); }
     }
 }

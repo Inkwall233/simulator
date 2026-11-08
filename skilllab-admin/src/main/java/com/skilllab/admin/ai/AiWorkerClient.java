@@ -56,6 +56,17 @@ public class AiWorkerClient {
         }
     }
 
+    public Map<String, Object> getRun(String host, String runId) {
+        HttpHeaders headers = headers();
+        headers.set("X-SkillLab-Run-Host", host);
+        try {
+            return restTemplate.exchange(workerUrl + "/internal/runs/" + runId, HttpMethod.GET,
+                    new HttpEntity<Void>(headers), Map.class).getBody();
+        } catch (HttpStatusCodeException exception) {
+            throw new AiWorkerException(exception.getStatusCode().value(), exception.getResponseBodyAsString());
+        }
+    }
+
     public byte[] getBytes(String path) {
         try {
             ResponseEntity<byte[]> response = restTemplate.exchange(

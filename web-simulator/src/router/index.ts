@@ -12,6 +12,11 @@ const router = createRouter({
       path: '/runtime',
       name: 'runtime',
       component: () => import('@/views/RuntimeView.vue')
+    },
+    {
+      path: '/simulators/:versionId',
+      name: 'simulator-run',
+      component: () => import('@/views/SimulatorRunView.vue')
     }
   ]
 })

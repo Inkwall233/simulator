@@ -1,0 +1,23 @@
+# Enable only after wildcard DNS and TLS cover *.runs.skilllab.xyz.
+# AI_RUN_ORIGIN_TEMPLATE=https://{runId}.runs.skilllab.xyz
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name "~^[a-f0-9]{32}\.runs\.skilllab\.xyz$";
+
+    ssl_certificate /etc/letsencrypt/live/runs.skilllab.xyz/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/runs.skilllab.xyz/privkey.pem;
+
+    location /internal {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://ai-worker:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_hide_header Set-Cookie;
+    }
+}

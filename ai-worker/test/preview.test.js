@@ -231,11 +231,16 @@ test('authorized run origins isolate service workers and state and reject forged
     const behavior = JSON.parse(await readFile(new URL('../../schemas/examples/simulator-behavior-v2.example.json', import.meta.url)))
     await Promise.all([a, b].map(async id => {
       const dir = path.join(root, id); await mkdir(dir); await writeFile(path.join(dir, 'index.html'), '<!doctype html><html><head></head><body>run</body></html>')
-      const response = await post('/internal/runs', { runId: id, host: `${id}.localhost:${port}`, projectId: 'p', ownerId: 'maker',
+      const response = await post('/internal/runs', { runId: id, versionId: 'v1', host: `${id}.localhost:${port}`, projectId: 'p', ownerId: 'maker',
         expiresAt: Date.now() + 60000, maxExpiresAt: Date.now() + 120000, sourceDirectory: dir, draft: behavior })
       assert.equal(response.status, 201, await response.text())
     }))
     assert.equal((await fetch(base + '/', { headers: { Host: `e${'e'.repeat(31)}.localhost:${port}` } })).status, 404)
+    const lookup = id => fetch(`${base}/internal/runs/${id}`, { headers: { 'X-SkillLab-Worker-Key': 'run-test-secret',
+      'X-SkillLab-Run-Host': `${id}.localhost:${port}` } })
+    assert.equal((await lookup(a)).status, 200)
+    assert.equal((await fetch(`${base}/internal/runs/${a}`, { headers: { 'X-SkillLab-Worker-Key': 'run-test-secret',
+      'X-SkillLab-Run-Host': `${b}.localhost:${port}` } })).status, 404)
     browser = await chromium.launch({ headless: true })
     const context = await browser.newContext()
     const one = await context.newPage(), two = await context.newPage()
@@ -246,9 +251,27 @@ test('authorized run origins isolate service workers and state and reject forged
     assert.equal(saveStatus, 200)
     const states = await Promise.all([one, two].map(page => page.evaluate(() => fetch('/api/config').then(r => r.json()).then(v => v.enabled))))
     assert.deepEqual(states, [true, false])
+    await one.reload()
+    await one.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+    assert.equal(await one.evaluate(() => fetch('/api/config').then(r => r.json()).then(v => v.enabled)), true)
     await post(`/internal/runs/${a}/end`, { runId: a })
+    assert.equal((await lookup(a)).status, 404)
     const responseAfterEnd = await fetch(`http://${a}.localhost:${port}/__skilllab/config.json`).then(response => response.status)
     assert.equal(responseAfterEnd, 404)
+    const writeAfterEnd = await one.evaluate(() => fetch('/api/config', { method: 'PUT',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) }).then(response => response.status))
+    assert.notEqual(writeAfterEnd, 200)
+    const c = 'f'.repeat(32)
+    const dir = path.join(root, c); await mkdir(dir); await writeFile(path.join(dir, 'index.html'), '<!doctype html><html><body>new run</body></html>')
+    const fresh = await post('/internal/runs', { runId: c, versionId: 'v1', host: `${c}.localhost:${port}`,
+      projectId: 'p', ownerId: 'maker', expiresAt: Date.now() + 60000, maxExpiresAt: Date.now() + 120000,
+      sourceDirectory: dir, draft: behavior })
+    assert.equal(fresh.status, 201)
+    const newPage = await context.newPage()
+    await newPage.goto(`http://${c}.localhost:${port}/__skilllab/start`)
+    await newPage.waitForURL(`http://${c}.localhost:${port}/`)
+    await newPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+    assert.equal(await newPage.evaluate(() => fetch('/api/config').then(r => r.json()).then(v => v.enabled)), false)
     await context.close()
   } finally {
     await browser?.close(); worker.kill()

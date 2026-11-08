@@ -34,6 +34,7 @@ skilllab:
     creator-username: ${SKILLLAB_CREATOR_USERNAME:}
     creator-password-hash: ${SKILLLAB_CREATOR_PASSWORD_HASH:}
     admin-origin: ${SKILLLAB_ADMIN_ORIGIN:http://localhost:5174}
+    simulator-origin: ${SKILLLAB_SIMULATOR_ORIGIN:http://localhost:5173}
     worker-url: ${AI_WORKER_URL:http://ai-worker:3001}
     worker-secret: ${AI_WORKER_SHARED_SECRET:}
     data-dir: ${AI_DATA_DIR:./data/ai-packages}

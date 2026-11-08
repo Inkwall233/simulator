@@ -40,6 +40,7 @@ const runPackageRoot = path.resolve(process.env.AI_RUN_PACKAGE_ROOT || path.reso
 const previewUrlTemplate = process.env.AI_PREVIEW_URL_TEMPLATE || `http://{previewId}.localhost:${port}`
 const runUrlTemplate = process.env.AI_RUN_ORIGIN_TEMPLATE || `http://{runId}.localhost:${port}`
 const previewParentOrigin = normalizeOrigin(process.env.AI_PREVIEW_PARENT_ORIGIN || 'http://localhost:5174')
+const runParentOrigin = normalizeOrigin(process.env.AI_RUN_PARENT_ORIGIN || 'http://localhost:5173')
 const maxPreviewLifetimeMs = 3600000
 const sessions = new Map()
 const previews = new Map()
@@ -370,6 +371,14 @@ app.post('/internal/runs/:id/heartbeat', async (request, response) => {
   } catch (error) { response.status(400).json({ error: publicError(error) }) }
 })
 
+app.get('/internal/runs/:id', async (request, response) => {
+  const run = await (await runRegistryPromise).resolve(request.headers['x-skilllab-run-host'])
+  if (!run || run.runId !== request.params.id) {
+    response.status(404).json({ error: 'Active run not found' }); return
+  }
+  response.json({ runId: run.runId, versionId: run.versionId, expiresAt: run.expiresAt })
+})
+
 app.post('/internal/runs/:id/end', async (request, response) => {
   try {
     if (request.body?.runId !== request.params.id) throw new Error('Run id mismatch')
@@ -385,9 +394,9 @@ app.use(async (request, response, next) => {
   if (!preview) {
     const run = await (await runRegistryPromise).resolve(request.headers.host)
     if (!run) { next(); return }
-    const runPreview = { id: run.runId, origin: new URL(`http://${run.host}`).origin,
+    const runPreview = { id: run.runId, origin: runUrlTemplate.replace('{runId}', run.runId),
       host: run.host, sourceDirectory: run.sourceDirectory, draft: run.draft,
-      expiresAt: new Date(run.expiresAt).toISOString(), parentOrigin: '', runLease: true }
+      expiresAt: new Date(run.expiresAt).toISOString(), parentOrigin: runParentOrigin, runLease: true }
     try { await servePreviewRequest(runPreview, request, response) }
     catch (error) { response.status(500).type('text/plain').send(publicError(error)) }
     return
