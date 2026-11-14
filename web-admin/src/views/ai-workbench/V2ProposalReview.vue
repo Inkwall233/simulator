@@ -8,19 +8,20 @@ const selected = ref<string[]>([])
 const rules = computed(() => (props.proposal.behavior.rules || []) as Array<Record<string, unknown>>)
 const prior = computed(() => new Map(((props.current?.rules || []) as Array<Record<string, unknown>>).map(rule => [String(rule.id), rule])))
 watch(() => props.proposal, () => { selected.value = [] })
+const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 function adopt() {
-  const result = structuredClone(props.current || props.proposal.behavior)
+  const result = copy(props.current || props.proposal.behavior)
   const merged = new Map(((result.rules || []) as Array<Record<string, unknown>>).map(rule => [String(rule.id), rule]))
   const proposed = props.proposal.behavior
   for (const rule of rules.value.filter(item => selected.value.includes(String(item.id)))) {
-    merged.set(String(rule.id), structuredClone(rule))
+    merged.set(String(rule.id), copy(rule))
     const cases = (result.verificationCases || []) as Array<Record<string, unknown>>
     const suggested = (proposed.verificationCases || []) as Array<Record<string, unknown>>
     for (const item of suggested.filter(test => ((test.steps || []) as Array<Record<string, unknown>>).some(step => step.expectedRuleId === rule.id))) {
       const index = cases.findIndex(existing => existing.id === item.id)
       if (index >= 0) cases.splice(index, 1)
-      cases.push(structuredClone(item))
+      cases.push(copy(item))
     }
     result.verificationCases = cases
     const critical = new Set(((result.scope as Record<string, unknown>)?.criticalRuleIds || []) as string[])
@@ -29,8 +30,10 @@ function adopt() {
   }
   result.rules = [...merged.values()]
   if (!props.current && selected.value.length !== rules.value.length) {
-    result.rules = rules.value.filter(rule => selected.value.includes(String(rule.id))).map(rule => structuredClone(rule))
+    result.rules = rules.value.filter(rule => selected.value.includes(String(rule.id))).map(rule => copy(rule))
     ;(result.scope as Record<string, unknown>).criticalRuleIds = ((result.scope as Record<string, unknown>).criticalRuleIds as string[]).filter(id => selected.value.includes(id))
+    result.verificationCases = ((result.verificationCases || []) as Array<Record<string, unknown>>).filter(test =>
+      ((test.steps || []) as Array<Record<string, unknown>>).every(step => selected.value.includes(String(step.expectedRuleId))))
   }
   emit('adopt', result)
 }

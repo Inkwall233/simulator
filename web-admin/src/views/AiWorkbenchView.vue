@@ -75,6 +75,7 @@ const pendingProposal = ref<{ rules: unknown[]; stateModel: Record<string, unkno
 const pendingV2 = ref<V2Proposal | null>(null)
 const selectedBaselineId = ref('')
 const adoptedSource = ref<{ sourceFingerprint: string; baselineId?: string; currentDraftId?: string } | undefined>()
+const selectedDraftId = ref('')
 const proposalContext = computed(() => [selectedProjectId.value, latestPackage.value?.id, apiDraftId.value,
   selectedBaselineId.value, selectedDraftId.value].join('|'))
 watch(proposalContext, () => { pendingV2.value = null; adoptedSource.value = undefined })
@@ -97,7 +98,6 @@ const workbenchViews: Array<{ id: WorkbenchView; label: string }> = [
   { id: 'behavior', label: '行为制作' }, { id: 'validation', label: '验证' },
   { id: 'version', label: '版本' }
 ]
-const selectedDraftId = ref('')
 const selectedDraft = computed(() => simulatorDraft.value?.id === selectedDraftId.value
   ? simulatorDraft.value : simulatorDrafts.value.find(item => item.id === selectedDraftId.value) || null)
 const behaviorRevisionJson = ref('')
