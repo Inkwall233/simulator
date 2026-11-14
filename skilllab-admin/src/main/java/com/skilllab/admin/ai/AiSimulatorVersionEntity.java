@@ -40,6 +40,10 @@ public class AiSimulatorVersionEntity {
         if (!"CANDIDATE".equals(status)) throw new IllegalStateException("Version is not a candidate");
         validationReportId = reportId; runtimeSha256 = runtimeHash; status = "ENABLED"; enabledAt = Instant.now();
     }
+    public void enableDemo(String reportId, String runtimeHash) {
+        if (!"CANDIDATE".equals(status)) throw new IllegalStateException("Version is not a candidate");
+        validationReportId = reportId; runtimeSha256 = runtimeHash; status = "DEMO_ENABLED"; enabledAt = Instant.now();
+    }
     public void disable() { status = "DISABLED"; }
     public String getId() { return id; }
     public String getDraftId() { return draftId; }

@@ -101,7 +101,7 @@ public class AiRunService {
         AiSimulatorVersionEntity version = versions.findById(versionId)
                 .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Simulator version not found"));
         if (!principal.equals(version.getCreatorId())) throw new SecurityException("Version belongs to another creator");
-        if (!"ENABLED".equals(version.getStatus())) throw new IllegalStateException("Only enabled versions can start normally");
+        if (!"ENABLED".equals(version.getStatus()) && !"DEMO_ENABLED".equals(version.getStatus())) throw new IllegalStateException("Only enabled versions can start normally");
         if (version.getRuntimeSha256() == null || !version.getRuntimeSha256().equals(
                 worker.getJson("/internal/validator-runtime").get("runtimeHash")))
             throw new IllegalStateException("Validated runtime has changed");
@@ -183,6 +183,7 @@ public class AiRunService {
     private Map<String, Object> runView(AiRunEntity run, AiSimulatorVersionEntity version) {
         Map<String, Object> view = new LinkedHashMap<String, Object>(); view.put("runId", run.getId());
         view.put("versionId", version.getId()); view.put("runUrl", runOriginTemplate.replace("{runId}", run.getId()) + "/__skilllab/start");
+        view.put("demoOnly", "DEMO_ENABLED".equals(version.getStatus()));
         view.put("expiresAt", run.getLeaseExpiresAt().toString()); view.put("heartbeatMs", heartbeatMs); return view;
     }
     private Instant min(Instant left, Instant right) { return left.isBefore(right) ? left : right; }

@@ -109,6 +109,7 @@ onBeforeUnmount(() => { stopHeartbeat(); window.removeEventListener('message', o
     <header><div><small>SKILLLAB / SIMULATOR</small><h1>设备仿真</h1><span>版本 {{ versionId }}</span></div>
       <div class="actions"><button v-if="run" :disabled="busy" @click="end">结束运行</button><button v-if="creator" @click="logout">退出登录</button></div>
     </header>
+    <p v-if="run?.demoOnly" class="demo-warning">仅演示，未验证真实设备一致性</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <form v-if="!creator" class="login" @submit.prevent="login">
       <h2>制作者登录</h2><input v-model="username" autocomplete="username" placeholder="用户名" required />
@@ -128,6 +129,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;pa
 header small{font-size:10px;color:#647d85}h1{margin:2px 0;font-size:19px}header span{font-size:12px;color:#657980}.actions{display:flex;gap:8px}
 button{padding:9px 14px;border:1px solid #b8c8cc;border-radius:5px;background:#fff;color:#223a42;cursor:pointer}button:disabled{opacity:.5;cursor:default}
 .error{margin:14px 28px;padding:10px;border:1px solid #e6b9b9;color:#a23d3d;background:#fff4f4}
+.demo-warning{margin:0;padding:10px 28px;background:#fff3d6;color:#634d13;font-weight:600}
 .login{display:grid;gap:10px;width:min(360px,calc(100% - 40px));margin:8vh auto;padding:22px;border:1px solid #dce3e6;background:#fff}
 .login h2{margin:0 0 5px;font-size:16px}.login input{padding:10px;border:1px solid #cbd5d9;border-radius:4px}.login button,.empty button{background:#237063;color:#fff;border-color:#237063}
 .empty{display:grid;flex:1;place-items:center}.stage{display:flex;flex:1;flex-direction:column;min-height:0}.stage-bar{display:flex;justify-content:space-between;gap:12px;padding:8px 28px;font-size:12px;color:#5f7278}

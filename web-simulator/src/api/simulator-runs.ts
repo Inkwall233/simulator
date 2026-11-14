@@ -4,6 +4,7 @@ export interface SimulatorRun {
   runUrl: string
   expiresAt: string
   heartbeatMs: number
+  demoOnly?: boolean
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
