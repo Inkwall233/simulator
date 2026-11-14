@@ -348,7 +348,7 @@ app.post('/internal/previews/:id/validate', async (request, response) => {
   }
   try {
     const preflight = validateSimulator({ behavior: preview.draft })
-    const report = await validateBrowserReplay(preview, await getBrowser(), preflight)
+    const report = await validateBrowserReplay(preview, await getBrowser(), preflight, request.body?.baseline || null)
     response.json(report)
   } catch (error) { response.status(400).json({ error: publicError(error) }) }
 })

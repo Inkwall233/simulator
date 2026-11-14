@@ -125,7 +125,7 @@ export interface SimulatorVersion {
   versionId: string
   draftId: string
   projectId: string
-  status: 'CANDIDATE' | 'ENABLED' | 'DISABLED'
+  status: 'CANDIDATE' | 'DEMO_ENABLED' | 'ENABLED' | 'DISABLED'
   packageSha256: string
   behaviorSha256: string
 }
@@ -143,10 +143,13 @@ export interface ValidationReport {
   cases: Array<{ id: string; passed: boolean; steps: Array<{ method: string; path: string; status: number; passed: boolean }> }>
   pageErrors: string[]
   externalRequests: string[]
+  consistency?: { status: 'NOT_TESTED' | 'PASSED' | 'BLOCKED' | 'PARTIAL'; baselineSha256: string | null;
+    comparisonSha256: string | null; differences: unknown[]; uncovered: unknown[] }
 }
 
-export function validateCandidate(projectId: string, versionId: string): Promise<ValidationReport> {
-  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId + '/validate', { method: 'POST' })
+export function validateCandidate(projectId: string, versionId: string, baselineId?: string): Promise<ValidationReport> {
+  return aiRequest('/device-projects/' + projectId + '/simulator-versions/' + versionId + '/validate', {
+    method: 'POST', body: JSON.stringify({ baselineId }) })
 }
 
 export function getValidationReport(projectId: string, versionId: string, reportId: string): Promise<ValidationReport> {

@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { validateBehaviorV2 } from './behavior-contract.js'
 import { evaluateBehavior } from './behavior-interpreter.js'
+import { compareDeviceBaseline } from './device-differential.js'
 
 export const validatorRuntimeVersion = 'behavior-runtime-v2'
 const runtimeFiles = ['simulator-validator.js', 'behavior-contract.js', 'behavior-interpreter.js',
-  'preview-mock-sw.js', 'preview-runtime-store.js', 'preview-bootstrap.js', 'server.js']
+  'preview-mock-sw.js', 'preview-runtime-store.js', 'preview-bootstrap.js', 'device-differential.js', 'server.js']
 const runtimeSources = await Promise.all(runtimeFiles.map(name => readFile(new URL(name, import.meta.url))))
 export const validatorRuntimeHash = createHash('sha256').update(validatorRuntimeVersion)
   .update(Buffer.concat(runtimeSources)).digest('hex')
@@ -75,8 +76,9 @@ export function validateSimulator(input) {
     runtimeHash: validatorRuntimeHash, blockers, warnings, cases, hitRuleIds: [...hitRules] }
 }
 
-export async function validateBrowserReplay(preview, browser, preflight = validateSimulator({ behavior: preview.draft })) {
+export async function validateBrowserReplay(preview, browser, preflight = validateSimulator({ behavior: preview.draft }), baseline = null) {
   const report = structuredClone(preflight)
+  report.consistency = compareDeviceBaseline(baseline)
   if (report.blockers.length) return report
   const errors = []
   const external = []
@@ -152,5 +154,36 @@ export async function validateBrowserReplay(preview, browser, preflight = valida
   report.pageErrors = errors
   report.externalRequests = external
   report.status = report.blockers.length ? 'BLOCKED' : 'PASSED'
+  if (baseline) {
+    const context = await browser.newContext({ serviceWorkers: 'allow', acceptDownloads: false })
+    const page = await context.newPage()
+    const observations = []
+    await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort())
+    try {
+      await page.goto(origin + '/__skilllab/start', { waitUntil: 'domcontentloaded', timeout: 10000 })
+      await page.waitForURL(origin + '/', { timeout: 10000 })
+      await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller), { timeout: 10000 })
+      for (const step of baseline.scenario?.steps || []) {
+        const observed = step.observation
+        const approved = preview.draft.rules.some(rule => rule.match.method === observed.method && rule.match.path === observed.path)
+        if (!approved || !['GET', 'HEAD'].includes(observed.method) || step.action !== 'READ') {
+          observations.push(null); continue
+        }
+        const result = await page.evaluate(async ({ method, path }) => {
+          const response = await fetch(path, { method })
+          const text = await response.text()
+          let body; try { body = JSON.parse(text) } catch { body = text }
+          return { method, path, status: response.status, body }
+        }, { method: observed.method, path: observed.path })
+        const checkpoint = step.checkpoint
+        if (checkpoint?.kind === 'URL_EQUALS') result.checkpoint = { passed: page.url() === checkpoint.value }
+        else if (checkpoint?.kind === 'TEXT_CONTAINS') result.checkpoint = { passed: await page.getByText(checkpoint.value, { exact: false }).count() > 0 }
+        else if (checkpoint?.kind === 'ELEMENT_VISIBLE') result.checkpoint = { passed: await page.locator(checkpoint.value).first().isVisible().catch(() => false) }
+        observations.push(result)
+      }
+    } catch { /* Unreplayable steps remain uncovered. */ }
+    finally { await context.close() }
+    report.consistency = compareDeviceBaseline(baseline, observations)
+  }
   return report
 }

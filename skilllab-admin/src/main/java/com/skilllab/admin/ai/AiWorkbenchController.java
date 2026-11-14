@@ -179,8 +179,9 @@ public class AiWorkbenchController {
 
     @PostMapping("/device-projects/{projectId}/simulator-versions/{versionId}/validate")
     public Map<String, Object> validateVersion(@PathVariable String projectId, @PathVariable String versionId,
-            HttpServletRequest request) {
-        return validations.validate(projectId, versionId, creatorAuth.requireUser(request));
+            @RequestBody(required = false) Map<String, Object> body, HttpServletRequest request) {
+        return validations.validate(projectId, versionId, creatorAuth.requireUser(request),
+                body == null ? null : optionalText(body.get("baselineId")));
     }
 
     @GetMapping("/device-projects/{projectId}/simulator-versions/{versionId}/reports/{reportId}")

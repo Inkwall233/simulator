@@ -21,6 +21,10 @@ public class AiValidationService {
     private final AiPreviewService previews;
     private final AiWorkerClient worker;
     private final ObjectMapper mapper;
+    private AiBaselineService baselines;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBaselines(AiBaselineService baselines) { this.baselines = baselines; }
 
     public AiValidationService(AiSimulatorVersionRepository versions, AiSimulatorDraftRepository drafts,
             AiPackageRepository packages, AiValidationRepository reports, AiPreviewService previews,
@@ -30,13 +34,26 @@ public class AiValidationService {
     }
 
     public Map<String, Object> validate(String projectId, String versionId, String creatorId) {
+        return validate(projectId, versionId, creatorId, null);
+    }
+
+    public Map<String, Object> validate(String projectId, String versionId, String creatorId, String baselineId) {
         AiSimulatorVersionEntity version = ownedVersion(projectId, versionId, creatorId);
         if (!"CANDIDATE".equals(version.getStatus())) throw new IllegalStateException("Only candidates can be validated");
         assertCurrentHashes(version);
         Map<String, Object> preview = previews.createPreview(projectId, version.getDraftId());
         String previewId = String.valueOf(preview.get("previewId"));
         try {
-            Map<String, Object> result = worker.post("/internal/previews/" + previewId + "/validate", java.util.Collections.emptyMap());
+            Map<String, Object> input = new LinkedHashMap<String, Object>();
+            if (baselineId != null && !baselineId.isEmpty()) {
+                if (baselines == null) throw new IllegalStateException("Baselines unavailable");
+                Map<String, Object> baseline = baselines.getBaseline(projectId, baselineId, creatorId);
+                AiSimulatorDraftEntity source = drafts.findById(version.getDraftId()).orElseThrow(() -> new IllegalStateException("Draft missing"));
+                if (!source.getPackageId().equals(baseline.get("packageId")) || !source.getSourceApiDraftId().equals(baseline.get("apiDraftId"))
+                        || !version.getPackageSha256().equals(baseline.get("packageSha256"))) throw new IllegalArgumentException("Baseline does not match candidate");
+                input.put("baseline", baseline);
+            }
+            Map<String, Object> result = worker.post("/internal/previews/" + previewId + "/validate", input);
             String status = String.valueOf(result.get("status"));
             String runtimeHash = String.valueOf(result.get("runtimeHash"));
             if (!("PASSED".equals(status) || "BLOCKED".equals(status)) || !runtimeHash.matches("[a-f0-9]{64}"))
@@ -88,8 +105,11 @@ public class AiValidationService {
                     || !(result.get("warnings") instanceof java.util.List)
                     || (!((java.util.List<?>) result.get("warnings")).isEmpty() && !acknowledgeWarnings))
                 throw new IllegalStateException("Validation findings must be reviewed before enabling");
+            Object consistency = result.get("consistency");
+            if (!(consistency instanceof Map) || !java.util.Arrays.asList("NOT_TESTED", "PARTIAL").contains(((Map<?, ?>) consistency).get("status")))
+                throw new IllegalStateException("Only demo-level consistency can be enabled in this phase");
         } catch (JsonProcessingException exception) { throw new IllegalStateException("Validation report is invalid", exception); }
-        version.enable(reportId, report.getRuntimeSha256()); versions.save(version);
+        version.enableDemo(reportId, report.getRuntimeSha256()); versions.save(version);
         Map<String, Object> view = new LinkedHashMap<String, Object>();
         view.put("versionId", versionId); view.put("status", version.getStatus()); view.put("reportId", reportId);
         return view;

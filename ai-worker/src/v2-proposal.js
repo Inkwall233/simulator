@@ -26,7 +26,8 @@ export function normalizeV2Proposal(candidate, input) {
         const item = observations.get(id)
         return item.method === rule.match.method && item.path === rule.match.path
           && item.status === rule.response.status && !item.truncated && !item.redacted
-          && Object.hasOwn(item, 'responseBody') && sameValue(item.responseBody, rule.response.body)
+          && item.responseSample !== null && item.responseSample !== undefined
+          && sameValue(item.responseSample, rule.response.body)
       })
       if (!supported) fail('Captured claim is not supported by the selected observations')
     }
@@ -36,7 +37,7 @@ export function normalizeV2Proposal(candidate, input) {
         const item = observations.get(id)
         return item.method === rule.match.method && item.path === rule.match.path
           && item.bodyUsable === true && !item.truncated && !item.redacted
-          && atPath(item.requestBody, op.requestPath) !== undefined
+          && atPath(item.body, op.requestPath) !== undefined
       })
       if (!usable) fail('Request field has no usable captured body')
     }

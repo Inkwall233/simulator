@@ -186,7 +186,7 @@ async function runValidation() {
   validationReport.value = null
   acknowledgeWarnings.value = false
   try {
-    const report = await validateCandidate(projectId, version.versionId)
+    const report = await validateCandidate(projectId, version.versionId, selectedBaselineId.value || undefined)
     if (projectId === selectedProjectId.value && candidate.value?.versionId === version.versionId) validationReport.value = report
     if (projectId === selectedProjectId.value) reportIdInput.value = report.reportId
   } catch (reason) { showError((reason as Error).message) }
@@ -1179,6 +1179,9 @@ function sizeLabel(size: number) {
             <div v-if="candidate" class="wb-report-lookup"><input v-model="reportIdInput" class="wb-input" placeholder="报告 ID" aria-label="报告 ID" /><button class="wb-secondary" :disabled="!reportIdInput.trim()" @click="loadReport">查看报告</button></div>
             <div v-if="validationReport" class="wb-validation-report">
               <strong>{{ validationReport.status === 'PASSED' ? '验证通过' : '验证阻断' }} · {{ validationReport.runtimeVersion }}</strong>
+              <p>真实设备一致性：{{ validationReport.consistency?.status || 'NOT_TESTED' }}</p>
+              <p v-for="(difference, index) in validationReport.consistency?.differences || []" :key="'diff-'+index">差异：{{ JSON.stringify(difference) }}</p>
+              <p v-for="(item, index) in validationReport.consistency?.uncovered || []" :key="'uncovered-'+index">未覆盖：{{ JSON.stringify(item) }}</p>
               <p v-for="(finding, index) in validationReport.blockers" :key="'blocker-'+index" class="wb-blocker">{{ finding.caseId ? finding.caseId + ' · ' : '' }}{{ finding.message }}</p>
               <button v-if="validationReport.blockers.length" class="wb-secondary" @click="activeView = 'behavior'">修改行为修订</button>
               <p v-for="(finding, index) in validationReport.warnings" :key="'warning-'+index" class="wb-warning">{{ finding.message }}</p>
@@ -1188,12 +1191,12 @@ function sizeLabel(size: number) {
               </div>
               <label v-if="validationReport.warnings.length" class="wb-risk-confirm"><input v-model="acknowledgeWarnings" type="checkbox" /> 我已审查并接受报告中的非阻断风险</label>
               <button v-if="validationReport.status === 'PASSED' && candidate?.status === 'CANDIDATE'" class="wb-primary"
-                :disabled="candidateBusy || (!!validationReport.warnings.length && !acknowledgeWarnings)" @click="enableValidated">启用已验证版本</button>
+                :disabled="candidateBusy || (!!validationReport.warnings.length && !acknowledgeWarnings)" @click="enableValidated">启用制作者演示</button>
             </div>
           </section>
           <section v-if="activeView === 'version'" class="wb-workflow-panel">
             <div class="wb-section-title"><div><span>VERSION</span><h2>版本状态</h2></div><button v-if="candidate" class="wb-secondary" @click="refreshCandidate">刷新</button></div>
-            <template v-if="candidate"><p>版本 {{ candidate.versionId }} · {{ candidate.status }}</p><p>包 SHA-256 {{ candidate.packageSha256 }}</p><p>行为 SHA-256 {{ candidate.behaviorSha256 }}</p><button v-if="candidate.status === 'CANDIDATE'" class="wb-primary" @click="activeView = 'validation'">前往验证</button></template>
+            <template v-if="candidate"><p>版本 {{ candidate.versionId }} · {{ candidate.status }}</p><p v-if="candidate.status === 'DEMO_ENABLED'">仅演示，未验证真实设备一致性</p><p>包 SHA-256 {{ candidate.packageSha256 }}</p><p>行为 SHA-256 {{ candidate.behaviorSha256 }}</p><button v-if="candidate.status === 'CANDIDATE'" class="wb-primary" @click="activeView = 'validation'">前往验证</button></template>
             <p v-else>尚未登记候选版本。选择 v2 行为修订并完成隔离预览后登记。</p>
           </section>
         </main>
