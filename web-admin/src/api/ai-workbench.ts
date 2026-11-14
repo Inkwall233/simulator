@@ -98,6 +98,19 @@ export interface SimulatorDraft {
   payload?: Record<string, unknown>
 }
 
+export interface V2Proposal {
+  behavior: Record<string, unknown>
+  sourceFingerprint: string
+  apiDraftId: string
+  baselineId: string | null
+  gaps: string[]
+}
+
+export function proposeV2(projectId: string, input: { packageId: string; apiDraftId: string;
+  baselineId?: string; currentDraftId?: string; goal: string }): Promise<V2Proposal> {
+  return aiRequest(`/device-projects/${projectId}/v2-proposals`, { method: 'POST', body: JSON.stringify(input) })
+}
+
 export interface SimulatorPreview {
   previewId: string
   projectId: string
@@ -146,9 +159,10 @@ export function enableCandidate(projectId: string, versionId: string, reportId: 
   })
 }
 
-export function createBehaviorRevision(projectId: string, sourceApiDraftId: string, behavior: Record<string, unknown>): Promise<SimulatorDraft> {
+export function createBehaviorRevision(projectId: string, sourceApiDraftId: string, behavior: Record<string, unknown>,
+  source?: { sourceFingerprint: string; baselineId?: string; currentDraftId?: string }): Promise<SimulatorDraft> {
   return aiRequest('/device-projects/' + projectId + '/simulator-drafts/v2', {
-    method: 'POST', body: JSON.stringify({ sourceApiDraftId, behavior })
+    method: 'POST', body: JSON.stringify({ sourceApiDraftId, behavior, ...source })
   })
 }
 

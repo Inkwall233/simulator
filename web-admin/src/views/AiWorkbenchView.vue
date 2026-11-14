@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import V2ProposalReview from './ai-workbench/V2ProposalReview.vue'
 import {
   aiRequest,
   currentCreator,
@@ -17,6 +18,7 @@ import {
   listCaptureEvidence,
   listBaselines,
   createBaseline,
+  proposeV2,
   uploadPackage,
   type BrowserSession,
   type CaptureEvidence,
@@ -29,6 +31,7 @@ import {
   type SimulatorPreview,
   type SimulatorVersion,
   type ValidationReport,
+  type V2Proposal,
   createSimulatorDraft as createSimulatorDraftRequest
 } from '@/api/ai-workbench'
 
@@ -69,6 +72,12 @@ const simulatorGoal = ref('')
 const proposingBehavior = ref(false)
 const behaviorNotes = ref<string[]>([])
 const pendingProposal = ref<{ rules: unknown[]; stateModel: Record<string, unknown>; notes: string[] } | null>(null)
+const pendingV2 = ref<V2Proposal | null>(null)
+const selectedBaselineId = ref('')
+const adoptedSource = ref<{ sourceFingerprint: string; baselineId?: string; currentDraftId?: string } | undefined>()
+const proposalContext = computed(() => [selectedProjectId.value, latestPackage.value?.id, apiDraftId.value,
+  selectedBaselineId.value, selectedDraftId.value].join('|'))
+watch(proposalContext, () => { pendingV2.value = null; adoptedSource.value = undefined })
 const proposalChanges = computed(() => {
   if (!pendingProposal.value) return []
   const current = apiDraft.value?.mockRules
@@ -261,13 +270,14 @@ async function confirmRevision() {
   try {
     const behavior = JSON.parse(behaviorRevisionJson.value) as Record<string, unknown>
     if (behavior.schemaVersion !== 'skilllab.simulator-behavior.v2') throw new Error('仅支持 v2 行为协议')
-    const created = await createBehaviorRevision(projectId, revisionSourceId.value, behavior)
+    const created = await createBehaviorRevision(projectId, revisionSourceId.value, behavior, adoptedSource.value)
     if (projectId !== selectedProjectId.value) return
     simulatorDrafts.value.unshift(created)
     simulatorDraft.value = created
     selectedDraftId.value = created.id
     candidate.value = null
     validationReport.value = null
+    adoptedSource.value = undefined
     addEvent('已确认并保存不可变行为修订 v' + created.versionNumber, 'success')
     activeView.value = 'validation'
   } catch (reason) { showError((reason as Error).message) }
@@ -309,6 +319,44 @@ async function proposeBehavior() {
       notes: Array.isArray(proposal.notes) ? proposal.notes : [] }
   } catch (reason) { showError((reason as Error).message) }
   finally { proposingBehavior.value = false }
+}
+
+async function proposeBehaviorV2() {
+  if (!latestPackage.value || !apiDraftId.value || !simulatorGoal.value.trim()) return
+  const context = proposalContext.value
+  proposingBehavior.value = true
+  try {
+    const proposal = await proposeV2(selectedProjectId.value, { packageId: latestPackage.value.id,
+      apiDraftId: apiDraftId.value, baselineId: selectedBaselineId.value || undefined,
+      currentDraftId: selectedDraftId.value || undefined, goal: simulatorGoal.value.trim() })
+    if (context !== proposalContext.value || proposal.apiDraftId !== apiDraftId.value) return
+    pendingV2.value = proposal
+  } catch (reason) { if (context === proposalContext.value) showError((reason as Error).message) }
+  finally { proposingBehavior.value = false }
+}
+
+function adoptV2(behavior: Record<string, unknown>) {
+  if (!pendingV2.value) return
+  behaviorRevisionJson.value = JSON.stringify(behavior, null, 2)
+  revisionSourceId.value = apiDraftId.value
+  adoptedSource.value = { sourceFingerprint: pendingV2.value.sourceFingerprint,
+    baselineId: selectedBaselineId.value || undefined, currentDraftId: selectedDraftId.value || undefined }
+  pendingV2.value = null
+}
+
+function startManualV2() {
+  const archive = latestPackage.value
+  if (!archive || !apiDraftId.value || !Array.isArray(apiDraft.value?.mockRules)) return
+  const rules = (apiDraft.value.mockRules as Array<Record<string, unknown>>).map((rule, index) => ({
+    id: rule.id, priority: index, match: rule.match,
+    response: { status: rule.status, contentType: rule.contentType || 'application/json', body: rule.body ?? null },
+    operations: [], evidence: { type: 'INFERRED_PENDING', observationIds: [], note: '待人工确认' }
+  }))
+  behaviorRevisionJson.value = JSON.stringify({ schemaVersion: 'skilllab.simulator-behavior.v2',
+    packageVersion: { id: archive.id, sha256: archive.sha256 }, scope: { name: '设备行为', criticalRuleIds: [] },
+    initialState: {}, rules, verificationCases: [] }, null, 2)
+  revisionSourceId.value = apiDraftId.value
+  adoptedSource.value = undefined
 }
 
 function adoptProposal() {
@@ -1007,10 +1055,15 @@ function sizeLabel(size: number) {
               <pre>{{ JSON.stringify(apiDraft, null, 2) }}</pre>
               <p>规则来自观察到的请求样例，不是最终可发布的设备配置；请审查后再接入 Simulator。</p>
             </details>
-            <div v-if="activeView === 'behavior' && apiDraft && editingApiDraftId === apiDraftId" class="wb-behavior-editor">
+            <div v-if="activeView === 'behavior' && apiDraft && latestPackage" class="wb-behavior-editor">
               <label class="wb-label" for="simulator-goal">模拟能力范围</label>
               <textarea id="simulator-goal" v-model="simulatorGoal" rows="2" placeholder="例如：设备参数读取、修改与保存；不包含录像播放" />
-              <button class="wb-secondary" :disabled="proposingBehavior || !simulatorGoal.trim()" @click="proposeBehavior">{{ proposingBehavior ? '生成中…' : 'AI 制作行为草案' }}</button>
+              <select v-model="selectedBaselineId" class="wb-input"><option value="">无真实设备基线（演示）</option><option v-for="item in baselines.filter(item => item.packageId === latestPackage?.id && item.apiDraftId === apiDraftId)" :key="item.id" :value="item.id">基线 {{ item.id.slice(0, 8) }}</option></select>
+              <div class="wb-proposal-actions"><button class="wb-secondary" :disabled="proposingBehavior || !simulatorGoal.trim()" @click="proposeBehaviorV2">{{ proposingBehavior ? '生成中…' : '生成 v2 提案' }}</button><button class="wb-secondary" @click="startManualV2">手工创建 v2</button></div>
+              <V2ProposalReview v-if="pendingV2" :proposal="pendingV2" :current="parsedBehavior" @adopt="adoptV2" @cancel="pendingV2 = null" />
+            </div>
+            <div v-if="activeView === 'behavior' && apiDraft && editingApiDraftId === apiDraftId" class="wb-behavior-editor">
+              <details><summary>旧版 Mock 提案</summary><button class="wb-secondary" :disabled="proposingBehavior || !simulatorGoal.trim()" @click="proposeBehavior">生成旧版草案</button></details>
               <div v-if="pendingProposal" class="wb-proposal-review">
                 <strong>待审查提案 · {{ proposalChanges.length }} 条规则</strong>
                 <div v-for="change in proposalChanges" :key="change.id" class="wb-proposal-row">
