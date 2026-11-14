@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.Map;
 import javax.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,5 +57,24 @@ public class AiSimulatorRunController {
     public ResponseEntity<Void> end(@PathVariable String runId, HttpServletRequest request) {
         runs.endRun(runId, auth.requireUser(request));
         return ResponseEntity.noContent().build();
+    }
+
+    @ExceptionHandler(AiWorkbenchService.AiNotFoundException.class)
+    public ResponseEntity<Map<String, String>> notFound(RuntimeException exception) {
+        return error(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<Map<String, String>> forbidden(SecurityException exception) {
+        return error(HttpStatus.FORBIDDEN, exception.getMessage());
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> conflict(IllegalStateException exception) {
+        return error(HttpStatus.CONFLICT, exception.getMessage());
+    }
+
+    private ResponseEntity<Map<String, String>> error(HttpStatus status, String message) {
+        return new ResponseEntity<Map<String, String>>(java.util.Collections.singletonMap("error", message), status);
     }
 }
