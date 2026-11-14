@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { selectEvidence } from './capture-evidence.js'
 import { validateBehaviorV2 } from './behavior-contract.js'
+import { proposeV2 } from './v2-proposal.js'
 import { createRunRegistry } from './runtime-host.js'
 import { validateSimulator, validateBrowserReplay, validatorRuntimeVersion, validatorRuntimeHash } from './simulator-validator.js'
 
@@ -302,6 +303,19 @@ app.post('/internal/simulator-behavior', async (request, response) => {
   } catch (error) {
     response.status(400).json({ error: publicError(error) })
   }
+})
+
+app.post('/internal/v2-proposals', async (request, response) => {
+  try {
+    const input = request.body || {}
+    if (typeof input.goal !== 'string' || !input.goal.trim() || input.goal.length > 4000
+        || !Array.isArray(input.capture?.mockRules) || input.capture.mockRules.length > 200
+        || !Array.isArray(input.observations) || input.observations.length > 500) {
+      throw new Error('Invalid v2 proposal input')
+    }
+    response.json(await proposeV2(input, { apiKey: process.env.AI_OPENAI_API_KEY,
+      model: process.env.AI_MODEL, endpoint: process.env.AI_OPENAI_CHAT_COMPLETIONS_URL }))
+  } catch (error) { response.status(400).json({ error: publicError(error) }) }
 })
 
 app.post('/internal/previews', async (request, response) => {

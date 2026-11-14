@@ -25,6 +25,7 @@ public class AiSimulatorDraftService {
     private final AiApiDraftRepository apiDrafts;
     private final AiSimulatorDraftRepository simulatorDrafts;
     private final AiSessionRepository sessions;
+    private AiV2ProposalService proposals;
     private final ObjectMapper objectMapper;
 
     public AiSimulatorDraftService(AiDeviceProjectRepository projects,
@@ -40,6 +41,9 @@ public class AiSimulatorDraftService {
         this.sessions = sessions;
         this.objectMapper = objectMapper;
     }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setProposals(AiV2ProposalService proposals) { this.proposals = proposals; }
 
     @Transactional
     public Map<String, Object> createDraft(String projectId, Map<String, Object> request) {
@@ -186,6 +190,15 @@ public class AiSimulatorDraftService {
 
     @Transactional
     public Map<String, Object> createDraftV2(String projectId, Map<String, Object> request) {
+        if (request.containsKey("sourceFingerprint")) {
+            if (!(request.get("behavior") instanceof Map) || proposals == null) throw new IllegalArgumentException("Invalid proposal save");
+            Object packageRef = ((Map<?, ?>) request.get("behavior")).get("packageVersion");
+            if (!(packageRef instanceof Map)) throw new IllegalArgumentException("Package reference is required");
+            String expected = proposals.fingerprint(projectId, stringValue(((Map<?, ?>) packageRef).get("id")),
+                    stringValue(request.get("sourceApiDraftId")), stringValue(request.get("baselineId")),
+                    stringValue(request.get("currentDraftId")), stringValue(request.get("creatorId")));
+            if (!expected.equals(request.get("sourceFingerprint"))) throw new IllegalStateException("Proposal source changed");
+        }
         projects.findByIdForUpdate(projectId)
                 .orElseThrow(() -> new AiWorkbenchService.AiNotFoundException("Device project not found"));
         Object raw = request.get("behavior");

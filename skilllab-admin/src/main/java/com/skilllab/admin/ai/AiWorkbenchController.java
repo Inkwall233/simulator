@@ -31,13 +31,15 @@ public class AiWorkbenchController {
     private final AiPreviewService previews;
     private final AiEvidenceService evidence;
     private final AiBaselineService baselines;
+    private final AiV2ProposalService v2Proposals;
     private final AiRunService runs;
     private final AiValidationService validations;
     private final AiCreatorAuth creatorAuth;
 
     public AiWorkbenchController(AiWorkbenchService service, AiWorkerClient worker,
             AiApiDraftService drafts, AiSimulatorDraftService simulatorDrafts,
-            AiPreviewService previews, AiEvidenceService evidence, AiBaselineService baselines, AiRunService runs,
+            AiPreviewService previews, AiEvidenceService evidence, AiBaselineService baselines,
+            AiV2ProposalService v2Proposals, AiRunService runs,
             AiValidationService validations, AiCreatorAuth creatorAuth) {
         this.service = service;
         this.worker = worker;
@@ -46,6 +48,7 @@ public class AiWorkbenchController {
         this.previews = previews;
         this.evidence = evidence;
         this.baselines = baselines;
+        this.v2Proposals = v2Proposals;
         this.runs = runs;
         this.validations = validations;
         this.creatorAuth = creatorAuth;
@@ -86,6 +89,17 @@ public class AiWorkbenchController {
         return baselines.getBaseline(projectId, baselineId, creatorAuth.requireUser(servletRequest));
     }
 
+    @PostMapping("/device-projects/{projectId}/v2-proposals")
+    public Map<String, Object> proposeV2(@PathVariable String projectId,
+            @RequestBody Map<String, Object> request, HttpServletRequest servletRequest) {
+        return v2Proposals.proposeV2(projectId, String.valueOf(request.get("packageId")),
+                String.valueOf(request.get("apiDraftId")), optionalText(request.get("baselineId")),
+                optionalText(request.get("currentDraftId")), String.valueOf(request.get("goal")),
+                creatorAuth.requireUser(servletRequest));
+    }
+
+    private String optionalText(Object value) { return value == null ? null : String.valueOf(value); }
+
     @PostMapping("/device-projects/{projectId}/simulator-drafts")
     public Map<String, Object> createSimulatorDraft(
             @PathVariable String projectId,
@@ -95,7 +109,8 @@ public class AiWorkbenchController {
 
     @PostMapping("/device-projects/{projectId}/simulator-drafts/v2")
     public Map<String, Object> createSimulatorDraftV2(
-            @PathVariable String projectId, @RequestBody Map<String, Object> request) {
+            @PathVariable String projectId, @RequestBody Map<String, Object> request, HttpServletRequest servletRequest) {
+        request.put("creatorId", creatorAuth.requireUser(servletRequest));
         return simulatorDrafts.createDraftV2(projectId, request);
     }
 
